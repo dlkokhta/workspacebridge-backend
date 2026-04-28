@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import * as speakeasy from 'speakeasy';
 import * as qrcode from 'qrcode';
@@ -11,10 +12,21 @@ import * as argon2 from 'argon2';
 
 @Injectable()
 export class TwoFactorAuthService {
+  private readonly jwtSecret: string;
+  private readonly accessExpiresIn: string;
+  private readonly refreshExpiresIn: string;
+
   constructor(
     private readonly prismaService: PrismaService,
     private readonly jwtService: JwtService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
+    this.accessExpiresIn =
+      this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
+    this.refreshExpiresIn =
+      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+  }
 
   async generateAndStoreSecret(userId: string, email: string) {
     const secret = speakeasy.generateSecret({
@@ -100,7 +112,7 @@ export class TwoFactorAuthService {
     let payload: any;
     try {
       payload = this.jwtService.verify(tempToken, {
-        secret: process.env.JWT_SECRET,
+        secret: this.jwtSecret,
       });
     } catch {
       throw new UnauthorizedException(
@@ -138,13 +150,13 @@ export class TwoFactorAuthService {
     };
 
     const accessToken = this.jwtService.sign(tokenPayload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+      secret: this.jwtSecret,
+      expiresIn: this.accessExpiresIn,
     });
 
     const refreshToken = this.jwtService.sign(tokenPayload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+      secret: this.jwtSecret,
+      expiresIn: this.refreshExpiresIn,
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);

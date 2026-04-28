@@ -9,6 +9,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UserService } from '../user/user.service';
 import { LoginUserDto } from './dto/login.dto';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import * as argon2 from 'argon2';
 import { GoogleRegisterDto } from './dto/google-register.dto';
@@ -18,12 +19,23 @@ import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AuthService {
+  private readonly jwtSecret: string;
+  private readonly accessExpiresIn: string;
+  private readonly refreshExpiresIn: string;
+
   constructor(
     private readonly userService: UserService,
     private readonly jwtService: JwtService,
     private readonly prismaService: PrismaService,
     private readonly mailService: MailService,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
+    this.accessExpiresIn =
+      this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
+    this.refreshExpiresIn =
+      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+  }
 
   // ── Token helpers ──────────────────────────────────────────────────────────
 
@@ -85,12 +97,12 @@ export class AuthService {
       role: userExist.role,
     };
     const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+      secret: this.jwtSecret,
+      expiresIn: this.accessExpiresIn,
     });
     const refreshToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+      secret: this.jwtSecret,
+      expiresIn: this.refreshExpiresIn,
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -218,7 +230,7 @@ export class AuthService {
           role: userExist.role,
           isTwoFactorAuthenticated: false,
         },
-        { secret: process.env.JWT_SECRET, expiresIn: '5m' },
+        { secret: this.jwtSecret, expiresIn: '5m' },
       );
       return { requiresTwoFactor: true as const, tempToken };
     }
@@ -230,12 +242,12 @@ export class AuthService {
       role: userExist.role,
     };
     const accessToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+      secret: this.jwtSecret,
+      expiresIn: this.accessExpiresIn,
     });
     const refreshToken = this.jwtService.sign(payload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+      secret: this.jwtSecret,
+      expiresIn: this.refreshExpiresIn,
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -264,7 +276,7 @@ export class AuthService {
     let payload: any;
     try {
       payload = this.jwtService.verify(refreshToken, {
-        secret: process.env.JWT_SECRET,
+        secret: this.jwtSecret,
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
@@ -299,12 +311,12 @@ export class AuthService {
       role: payload.role,
     };
     const newAccess = this.jwtService.sign(newPayload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '15m',
+      secret: this.jwtSecret,
+      expiresIn: this.accessExpiresIn,
     });
     const newRefresh = this.jwtService.sign(newPayload, {
-      secret: process.env.JWT_SECRET,
-      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
+      secret: this.jwtSecret,
+      expiresIn: this.refreshExpiresIn,
     });
 
     // 5. rotate: update existing session in-place (safer than delete+create)
@@ -322,7 +334,7 @@ export class AuthService {
 
   async logout(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, { secret: process.env.JWT_SECRET });
+      const payload = this.jwtService.verify(refreshToken, { secret: this.jwtSecret });
       await this.prismaService.session.deleteMany({
         where: { userId: payload.userId },
       });
