@@ -12,7 +12,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { User } from '@prisma/client';
 import { AuthService } from './auth.service';
+import { GoogleUser } from './types/google-user.type';
 import { TwoFactorAuthService } from './two-factor-auth.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login.dto';
@@ -47,7 +49,7 @@ export class AuthController {
   @UseGuards(GoogleOAuthGuard)
   async googleAuthRedirect(@Req() req: Request, @Res() res: Response) {
     try {
-      const googleUser = req.user;
+      const googleUser = req.user as unknown as GoogleUser;
       const ip = req.ip;
       const userAgent = req.headers['user-agent'];
       const result = await this.authService.findOrCreateGoogleUser(
@@ -225,7 +227,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Generate 2FA secret and QR code' })
   @ApiResponse({ status: 200, description: 'Returns QR code data URL to scan with authenticator app' })
   public async generateTwoFactor(@Req() req: Request) {
-    const user = req.user as any;
+    const user = req.user as User;
     return this.twoFactorAuthService.generateAndStoreSecret(user.id, user.email);
   }
 
@@ -237,7 +239,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: '2FA enabled successfully' })
   @ApiResponse({ status: 401, description: 'Invalid code' })
   public async enableTwoFactor(@Req() req: Request, @Body() body: TwoFactorCodeDto) {
-    const user = req.user as any;
+    const user = req.user as User;
     return this.twoFactorAuthService.enableTwoFactor(user.id, body.code);
   }
 
@@ -249,7 +251,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: '2FA disabled successfully' })
   @ApiResponse({ status: 401, description: 'Invalid code' })
   public async disableTwoFactor(@Req() req: Request, @Body() body: TwoFactorCodeDto) {
-    const user = req.user as any;
+    const user = req.user as User;
     return this.twoFactorAuthService.disableTwoFactor(user.id, body.code);
   }
 

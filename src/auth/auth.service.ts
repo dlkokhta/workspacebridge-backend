@@ -16,6 +16,8 @@ import { GoogleRegisterDto } from './dto/google-register.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { MailService } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
+import { JwtPayload } from './types/jwt-payload.type';
+import { GoogleUser } from './types/google-user.type';
 
 @Injectable()
 export class AuthService {
@@ -148,8 +150,9 @@ export class AuthService {
 
     const newAccount = await this.prismaService.account.create({
       data: {
-        type: 'oauth', // or 'google'
+        type: 'oauth',
         provider: 'google',
+        providerAccountId: googleUserRegister.googleId,
         userId: newUser.id,
         accessToken: googleUserRegister.accessToken || null,
         refreshToken: googleUserRegister.refreshToken || null,
@@ -159,7 +162,7 @@ export class AuthService {
     return { newUser, newAccount };
   }
 
-  async findOrCreateGoogleUser(googleUser: any, ip?: string, userAgent?: string) {
+  async findOrCreateGoogleUser(googleUser: GoogleUser, ip?: string, userAgent?: string) {
     const existingUser = await this.userService.findByEmail(googleUser.email);
 
     if (existingUser) {
@@ -281,9 +284,9 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     // 1. verify JWT
-    let payload: any;
+    let payload: JwtPayload;
     try {
-      payload = this.jwtService.verify(refreshToken, {
+      payload = this.jwtService.verify<JwtPayload>(refreshToken, {
         secret: this.jwtSecret,
       });
     } catch {
@@ -347,7 +350,7 @@ export class AuthService {
 
   async logout(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, { secret: this.jwtSecret });
+      const payload = this.jwtService.verify<JwtPayload>(refreshToken, { secret: this.jwtSecret });
 
       if (payload.sessionId) {
         await this.prismaService.session

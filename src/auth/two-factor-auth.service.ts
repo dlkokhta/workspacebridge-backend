@@ -10,6 +10,7 @@ import * as speakeasy from 'speakeasy';
 import * as qrcode from 'qrcode';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'crypto';
+import { JwtPayload } from './types/jwt-payload.type';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -110,9 +111,9 @@ export class TwoFactorAuthService {
     ip?: string,
     userAgent?: string,
   ) {
-    let payload: any;
+    let payload: JwtPayload;
     try {
-      payload = this.jwtService.verify(tempToken, {
+      payload = this.jwtService.verify<JwtPayload>(tempToken, {
         secret: this.jwtSecret,
       });
     } catch {
