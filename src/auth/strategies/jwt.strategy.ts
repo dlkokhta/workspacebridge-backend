@@ -23,13 +23,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('Invalid token');
     }
 
-    // 2. Verify that the user still exists in the database
+    // 2. Reject 2FA pre-auth tokens — they may only be used at /auth/2fa/verify
+    if (payload.isTwoFactorAuthenticated === false) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    // 3. Verify that the user still exists in the database
     const user = await this.userService.findById(payload.userId);
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    // 3. Return the user object (this will become req.user)
+    // 4. Return the user object (this will become req.user)
     return user;
   }
 }
