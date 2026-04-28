@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as speakeasy from 'speakeasy';
 import * as qrcode from 'qrcode';
 import * as argon2 from 'argon2';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -143,18 +144,20 @@ export class TwoFactorAuthService {
       throw new UnauthorizedException('Invalid authentication code');
     }
 
-    const tokenPayload = {
+    const sessionId = randomUUID();
+    const accessPayload = {
       userId: user.id,
       email: user.email,
       role: user.role,
     };
+    const refreshPayload = { ...accessPayload, sessionId };
 
-    const accessToken = this.jwtService.sign(tokenPayload, {
+    const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
       expiresIn: this.accessExpiresIn,
     });
 
-    const refreshToken = this.jwtService.sign(tokenPayload, {
+    const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtSecret,
       expiresIn: this.refreshExpiresIn,
     });
@@ -163,6 +166,7 @@ export class TwoFactorAuthService {
 
     await this.prismaService.session.create({
       data: {
+        id: sessionId,
         userId: user.id,
         refreshToken: hashedRefreshToken,
         ip,

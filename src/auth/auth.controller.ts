@@ -48,7 +48,13 @@ export class AuthController {
   async googleAuthRedirect(@Req() req: Request, @Res() res: Response) {
     try {
       const googleUser = req.user;
-      const result = await this.authService.findOrCreateGoogleUser(googleUser);
+      const ip = req.ip;
+      const userAgent = req.headers['user-agent'];
+      const result = await this.authService.findOrCreateGoogleUser(
+        googleUser,
+        ip,
+        userAgent,
+      );
 
       res.cookie('refreshToken', result.refreshToken, {
         httpOnly: true,

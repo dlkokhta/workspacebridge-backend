@@ -83,24 +83,26 @@ export class AuthService {
   }
 
   //google user login
-  async loginGoogleUser(googleUserLogin: GoogleLoginDto) {
+  async loginGoogleUser(googleUserLogin: GoogleLoginDto, ip?: string, userAgent?: string) {
     const userExist = await this.userService.findByEmail(googleUserLogin.email);
 
     if (!userExist) {
       throw new NotFoundException('User not found');
     }
 
-    // Generate tokens
-    const payload = {
+    const sessionId = randomUUID();
+    const accessPayload = {
       userId: userExist.id,
       email: userExist.email,
       role: userExist.role,
     };
-    const accessToken = this.jwtService.sign(payload, {
+    const refreshPayload = { ...accessPayload, sessionId };
+
+    const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
       expiresIn: this.accessExpiresIn,
     });
-    const refreshToken = this.jwtService.sign(payload, {
+    const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtSecret,
       expiresIn: this.refreshExpiresIn,
     });
@@ -109,8 +111,11 @@ export class AuthService {
 
     await this.prismaService.session.create({
       data: {
+        id: sessionId,
         userId: userExist.id,
         refreshToken: hashedRefreshToken,
+        ip,
+        userAgent,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       },
     });
@@ -154,11 +159,11 @@ export class AuthService {
     return { newUser, newAccount };
   }
 
-  async findOrCreateGoogleUser(googleUser: any) {
+  async findOrCreateGoogleUser(googleUser: any, ip?: string, userAgent?: string) {
     const existingUser = await this.userService.findByEmail(googleUser.email);
 
     if (existingUser) {
-      return this.loginGoogleUser({ email: googleUser.email });
+      return this.loginGoogleUser({ email: googleUser.email }, ip, userAgent);
     }
 
     const newUser = await this.registerGoogleUser({
@@ -170,7 +175,7 @@ export class AuthService {
       avatar: googleUser.avatar,
     });
 
-    return this.loginGoogleUser({ email: newUser.newUser.email });
+    return this.loginGoogleUser({ email: newUser.newUser.email }, ip, userAgent);
   }
 
   ///////////////////////////////////////////////////////////////////////////////////
@@ -235,17 +240,19 @@ export class AuthService {
       return { requiresTwoFactor: true as const, tempToken };
     }
 
-    // Generate tokens
-    const payload = {
+    const sessionId = randomUUID();
+    const accessPayload = {
       userId: userExist.id,
       email: userExist.email,
       role: userExist.role,
     };
-    const accessToken = this.jwtService.sign(payload, {
+    const refreshPayload = { ...accessPayload, sessionId };
+
+    const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
       expiresIn: this.accessExpiresIn,
     });
-    const refreshToken = this.jwtService.sign(payload, {
+    const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtSecret,
       expiresIn: this.refreshExpiresIn,
     });
@@ -254,6 +261,7 @@ export class AuthService {
 
     await this.prismaService.session.create({
       data: {
+        id: sessionId,
         userId: userExist.id,
         refreshToken: hashedRefreshToken,
         ip,
@@ -282,49 +290,54 @@ export class AuthService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    // 2. look up all sessions for this user and verify the refresh token hash
-    const sessions = await this.prismaService.session.findMany({
-      where: { userId: payload.userId },
-    });
-
-    let session: any = null;
-    for (const s of sessions) {
-      if (await argon2.verify(s.refreshToken, refreshToken)) {
-        session = s;
-        break;
-      }
+    if (!payload.sessionId) {
+      throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (!session) {
+    // 2. direct lookup by sessionId
+    const session = await this.prismaService.session.findUnique({
+      where: { id: payload.sessionId },
+    });
+
+    if (!session || session.userId !== payload.userId) {
       throw new UnauthorizedException('Refresh token not found');
     }
 
-    // 3. check expiry
+    // 3. verify the refresh token matches the stored hash
+    const isValid = await argon2.verify(session.refreshToken, refreshToken);
+    if (!isValid) {
+      // Token doesn't match — possible reuse of a rotated token. Revoke this session.
+      await this.prismaService.session.delete({ where: { id: session.id } });
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    // 4. check expiry
     if (new Date() > session.expiresAt) {
       throw new UnauthorizedException('Refresh token expired');
     }
 
-    // 4. generate new tokens
-    const newPayload = {
+    // 5. generate new tokens (sessionId stays the same across rotations)
+    const accessPayload = {
       userId: payload.userId,
       email: payload.email,
       role: payload.role,
     };
-    const newAccess = this.jwtService.sign(newPayload, {
+    const refreshPayloadNew = { ...accessPayload, sessionId: session.id };
+
+    const newAccess = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
       expiresIn: this.accessExpiresIn,
     });
-    const newRefresh = this.jwtService.sign(newPayload, {
+    const newRefresh = this.jwtService.sign(refreshPayloadNew, {
       secret: this.jwtSecret,
       expiresIn: this.refreshExpiresIn,
     });
 
-    // 5. rotate: update existing session in-place (safer than delete+create)
+    // 6. rotate: update existing session in-place
     await this.prismaService.session.update({
       where: { id: session.id },
       data: {
         refreshToken: await argon2.hash(newRefresh),
-
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
     });
@@ -336,15 +349,10 @@ export class AuthService {
     try {
       const payload = this.jwtService.verify(refreshToken, { secret: this.jwtSecret });
 
-      const sessions = await this.prismaService.session.findMany({
-        where: { userId: payload.userId },
-      });
-
-      for (const session of sessions) {
-        if (await argon2.verify(session.refreshToken, refreshToken)) {
-          await this.prismaService.session.delete({ where: { id: session.id } });
-          break;
-        }
+      if (payload.sessionId) {
+        await this.prismaService.session
+          .delete({ where: { id: payload.sessionId } })
+          .catch(() => undefined); // already deleted — idempotent
       }
 
       return { message: 'Logged out successfully' };
