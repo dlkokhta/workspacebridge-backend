@@ -72,7 +72,11 @@ export class AuthController {
 
   // Get user profile
   @Get('profile')
-  getProfile(@Req() req) {
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get authenticated user profile' })
+  @ApiResponse({ status: 200, description: 'Returns the authenticated user' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getProfile(@Req() req: Request) {
     return req.user;
   }
 

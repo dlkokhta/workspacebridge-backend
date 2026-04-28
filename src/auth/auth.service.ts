@@ -335,9 +335,18 @@ export class AuthService {
   async logout(refreshToken: string) {
     try {
       const payload = this.jwtService.verify(refreshToken, { secret: this.jwtSecret });
-      await this.prismaService.session.deleteMany({
+
+      const sessions = await this.prismaService.session.findMany({
         where: { userId: payload.userId },
       });
+
+      for (const session of sessions) {
+        if (await argon2.verify(session.refreshToken, refreshToken)) {
+          await this.prismaService.session.delete({ where: { id: session.id } });
+          break;
+        }
+      }
+
       return { message: 'Logged out successfully' };
     } catch {
       // Token invalid, but still return success (idempotent)
