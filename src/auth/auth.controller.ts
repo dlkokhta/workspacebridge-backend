@@ -3,6 +3,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   Req,
   Res,
@@ -30,6 +31,8 @@ import { Throttle } from '@nestjs/throttler';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly twoFactorAuthService: TwoFactorAuthService,
@@ -40,7 +43,7 @@ export class AuthController {
   @Get('google')
   @UseGuards(GoogleOAuthGuard)
   async googleAuth() {
-    console.log('Redirecting to Google for authentication');
+    this.logger.log('Redirecting to Google for authentication');
     // This will redirect to Google
   }
 
@@ -48,6 +51,8 @@ export class AuthController {
   @Get('google/callback')
   @UseGuards(GoogleOAuthGuard)
   async googleAuthRedirect(@Req() req: Request, @Res() res: Response) {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL');
+
     try {
       const googleUser = req.user as unknown as GoogleUser;
       const ip = req.ip;
@@ -67,14 +72,12 @@ export class AuthController {
       });
 
       // Send only the access token to frontend
-      const frontendUrl = this.configService.get<string>('FRONTEND_URL');
       return res.redirect(
         `${frontendUrl}/auth/success?token=${result.accessToken}`,
       );
     } catch (error) {
-      const frontendUrl = this.configService.get<string>('FRONTEND_URL');
-      const errorUrl = `${frontendUrl}/auth/error?status=error&message=${encodeURIComponent(error.message)}`;
-      return res.redirect(errorUrl);
+      this.logger.error('Google OAuth callback failed', error);
+      return res.redirect(`${frontendUrl}/auth/error?error=oauth_failed`);
     }
   }
 
