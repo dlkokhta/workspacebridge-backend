@@ -174,7 +174,9 @@ export class AuthService {
         userId: newUser.id,
         accessToken: googleUserRegister.accessToken || null,
         refreshToken: googleUserRegister.refreshToken || null,
-        expiresAt: googleUserRegister.expiresAt || 0,
+        expiresAt: googleUserRegister.expiresAt
+          ? new Date(googleUserRegister.expiresAt * 1000)
+          : null,
       },
     });
     return { newUser, newAccount };
