@@ -39,6 +39,24 @@ export class AuthService {
       this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
   }
 
+  private static readonly MAX_FAILED_LOGIN_ATTEMPTS = 5;
+  private static readonly LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+  private async registerFailedLogin(userId: string, currentAttempts: number) {
+    const newAttempts = currentAttempts + 1;
+    const shouldLock = newAttempts >= AuthService.MAX_FAILED_LOGIN_ATTEMPTS;
+
+    await this.prismaService.user.update({
+      where: { id: userId },
+      data: {
+        failedLoginAttempts: newAttempts,
+        lockedUntil: shouldLock
+          ? new Date(Date.now() + AuthService.LOCKOUT_DURATION_MS)
+          : null,
+      },
+    });
+  }
+
   // ── Token helpers ──────────────────────────────────────────────────────────
 
   private async createVerificationToken(email: string): Promise<string> {
@@ -212,6 +230,16 @@ export class AuthService {
       );
     }
 
+    // Account lockout check
+    if (userExist.lockedUntil && userExist.lockedUntil > new Date()) {
+      const minutesLeft = Math.ceil(
+        (userExist.lockedUntil.getTime() - Date.now()) / 60000,
+      );
+      throw new UnauthorizedException(
+        `Account locked due to too many failed login attempts. Try again in ${minutesLeft} minute(s).`,
+      );
+    }
+
     if (!userExist.password) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -222,11 +250,20 @@ export class AuthService {
     );
 
     if (!isValidPassword) {
+      await this.registerFailedLogin(userExist.id, userExist.failedLoginAttempts);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!userExist.isVerified) {
       throw new UnauthorizedException('Please verify your email address before logging in.');
+    }
+
+    // Successful password check — reset lockout counters if needed
+    if (userExist.failedLoginAttempts > 0 || userExist.lockedUntil) {
+      await this.prismaService.user.update({
+        where: { id: userExist.id },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
     }
 
     // If 2FA is enabled, issue a short-lived pre-auth token instead of full tokens
