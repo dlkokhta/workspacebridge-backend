@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WorkspaceService } from './workspace.service';
@@ -48,5 +48,15 @@ export class WorkspaceController {
   @ApiResponse({ status: 403, description: 'Access denied' })
   update(@Req() req: Request, @Param('id') id: string, @Body() dto: UpdateWorkspaceDto) {
     return this.workspaceService.update(id, (req.user as any).id, dto);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.FREELANCER)
+  @ApiOperation({ summary: 'Delete a workspace' })
+  @ApiResponse({ status: 200, description: 'Workspace deleted' })
+  @ApiResponse({ status: 404, description: 'Workspace not found' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  remove(@Req() req: Request, @Param('id') id: string) {
+    return this.workspaceService.remove(id, (req.user as any).id);
   }
 }
