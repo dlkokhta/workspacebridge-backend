@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
+import { UpdateWorkspaceDto } from './dto/update-workspace.dto';
 
 @Injectable()
 export class WorkspaceService {
@@ -58,5 +59,22 @@ export class WorkspaceService {
     }
 
     return workspace;
+  }
+
+  async update(id: string, userId: string, dto: UpdateWorkspaceDto) {
+    const workspace = await this.prisma.workspace.findUnique({ where: { id } });
+
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    if (workspace.ownerId !== userId) throw new ForbiddenException('Access denied');
+
+    return this.prisma.workspace.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.description !== undefined && { description: dto.description }),
+        ...(dto.color !== undefined && { color: dto.color }),
+        ...(dto.status !== undefined && { status: dto.status }),
+      },
+    });
   }
 }

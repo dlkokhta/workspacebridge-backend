@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WorkspaceService } from './workspace.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
+import { UpdateWorkspaceDto } from './dto/update-workspace.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -37,5 +38,15 @@ export class WorkspaceController {
   @ApiResponse({ status: 403, description: 'Access denied' })
   findOne(@Req() req: Request, @Param('id') id: string) {
     return this.workspaceService.findOne(id, (req.user as any).id, (req.user as any).role);
+  }
+
+  @Patch(':id')
+  @Roles(UserRole.FREELANCER)
+  @ApiOperation({ summary: 'Update workspace name, description, color or status' })
+  @ApiResponse({ status: 200, description: 'Workspace updated' })
+  @ApiResponse({ status: 404, description: 'Workspace not found' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  update(@Req() req: Request, @Param('id') id: string, @Body() dto: UpdateWorkspaceDto) {
+    return this.workspaceService.update(id, (req.user as any).id, dto);
   }
 }
