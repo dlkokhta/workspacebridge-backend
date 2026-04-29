@@ -2,8 +2,8 @@
 
 > Freelancer–client collaboration platform — Backend API
 
-**📡 API Docs (Swagger):** coming soon
-**🔗 Live Frontend:** coming soon
+**API Docs (Swagger):** `http://localhost:4002/docs`
+**Frontend repo:** [workspacebridge-frontend](../workspacebridge-frontend)
 
 ![NestJS](https://img.shields.io/badge/NestJS-11-E0234E?logo=nestjs&logoColor=white&style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white&style=flat-square)
@@ -13,6 +13,10 @@
 
 ---
 
+## What is this?
+
+The backend API for **WorkspaceBridge**, a freelancer–client collaboration platform. The current scope is a hardened authentication system with user management — the foundation that the rest of the product is being built on top of.
+
 ## Tech Stack
 
 | Category | Technology |
@@ -20,53 +24,53 @@
 | Framework | NestJS (Node.js) |
 | Language | TypeScript |
 | Database | PostgreSQL + Prisma ORM |
-| Auth | JWT (access + refresh tokens), Google OAuth 2.0 |
+| Auth | JWT (access + refresh), Google OAuth 2.0, TOTP 2FA |
 | Password hashing | Argon2 |
 | Email | Resend |
-| Security | Helmet, Rate limiting (@nestjs/throttler) |
+| Security | Helmet, @nestjs/throttler, argon2-hashed refresh tokens |
 | Logging | nestjs-pino (pretty in dev, JSON in prod) |
 | API Docs | Swagger / OpenAPI |
 | Testing | Jest + Supertest |
 | CI/CD | GitHub Actions + PM2 |
 
-## Security Highlights
-
-- 🔒 Passwords hashed with **Argon2** (not bcrypt)
-- 🍪 Refresh tokens stored in **HttpOnly cookies** — not accessible to JavaScript
-- 🔄 **Refresh token rotation** — every refresh issues a new token and invalidates the old one
-- 🗄️ Refresh tokens stored as **hashes** in the database — plain text never persists
-- �️ **Two-Factor Authentication (TOTP)** — Google Authenticator / Authy compatible
-- �🚫 **Rate limiting** on all auth endpoints
-- 🛡️ **Helmet** HTTP security headers
-- ✉️ Password reset tokens expire in **1 hour**
-- 🔐 Role-based access control (REGULAR / ADMIN)
-
 ## Features
 
-- 📝 Register & login with email/password
-- 🔑 Google OAuth 2.0 login
-- 📧 Email verification (required before login)
-- 🔄 Forgot / reset password via email
-- ♻️ JWT access token (15m) + refresh token (7d, HttpOnly cookie)
-- � Two-Factor Authentication (TOTP) — enable/disable via Google Authenticator or Authy
-- 👤 User profile — view, edit name, change password
-- 🛠️ Admin panel — view all users, change role, delete user, pagination
+### Authentication
+- Register & login with email/password
+- Google OAuth 2.0 (one-click sign-in)
+- Email verification required before login (24h token)
+- Forgot / reset password via email (1h token)
+- TOTP 2FA — Google Authenticator / Authy compatible (enable, disable, verify on login)
+- JWT access token (15m) + refresh token (7d) with rotation on every refresh
+- Refresh tokens stored as **argon2 hashes** in the database; plaintext never persists
+- HttpOnly, `sameSite: strict` refresh cookie (CSRF-resistant)
+- O(1) session lookup via `sessionId` embedded in the refresh JWT
+
+### Account safety
+- Account lockout after **5 failed login attempts** (15-minute cooldown)
+- Per-user **session cap of 10** — oldest session evicted on new login
+- Hourly **cleanup job** purges expired sessions and tokens
+- Per-endpoint rate limiting on auth flows (forgot-password, reset-password, verify-email)
+- 2FA pre-auth tokens cannot be used as access tokens (token-type confusion prevented)
+
+### User management
+- View / update profile (name)
+- Change password (re-validates current password)
+- Admin panel — list users, change role, delete user, pagination
+- Role-based access control: `FREELANCER` / `CLIENT` / `ADMIN`
 
 ## Getting Started
 
 ### Prerequisites
-
 - Node.js 18+
 - Docker (for PostgreSQL via docker-compose)
 
 ### 1. Install dependencies
-
 ```bash
 npm install
 ```
 
 ### 2. Set up environment variables
-
 Create a `.env` file:
 
 ```env
@@ -104,19 +108,16 @@ RESEND_FROM_EMAIL=noreply@yourdomain.com
 ```
 
 ### 3. Start the database
-
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 4. Run database migrations
-
 ```bash
 npx prisma migrate deploy
 ```
 
 ### 5. Start the server
-
 ```bash
 # development
 npm run start:dev
@@ -128,13 +129,9 @@ npm run build && npm run start:prod
 Server runs on `http://localhost:4002`. Swagger UI at `http://localhost:4002/docs`.
 
 ### 6. Run tests
-
 ```bash
-# Unit tests
-npm run test
-
-# E2E tests
-npm run test:e2e
+npm run test       # unit
+npm run test:e2e   # end-to-end
 ```
 
 ## API Reference
@@ -145,13 +142,13 @@ npm run test:e2e
 |--------|----------|-------------|
 | POST | `/auth/signup` | Register with email/password |
 | POST | `/auth/login` | Login with email/password |
-| POST | `/auth/logout` | Logout (clears refresh cookie) |
-| POST | `/auth/refresh` | Refresh access token |
+| POST | `/auth/logout` | Logout (clears the matching session only) |
+| POST | `/auth/refresh` | Rotate access + refresh tokens |
 | GET | `/auth/google` | Initiate Google OAuth |
 | GET | `/auth/google/callback` | Google OAuth callback |
 | GET | `/auth/verify-email` | Verify email via token |
 | POST | `/auth/forgot-password` | Send reset password email |
-| POST | `/auth/reset-password` | Reset password via token |
+| POST | `/auth/reset-password` | Reset password (invalidates all sessions) |
 | POST | `/auth/2fa/generate` | Generate TOTP secret + QR code |
 | POST | `/auth/2fa/enable` | Enable 2FA after scanning QR |
 | POST | `/auth/2fa/disable` | Disable 2FA |
@@ -165,11 +162,11 @@ npm run test:e2e
 | PATCH | `/user/me` | Update name |
 | PATCH | `/user/me/password` | Change password |
 
-### Admin (`/admin`) — requires JWT + ADMIN role
+### Admin (`/admin`) — requires JWT + `ADMIN` role
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/admin/users` | Get all users |
+| GET | `/admin/users` | Get all users (paginated) |
 | PATCH | `/admin/users/:id/role` | Change user role |
 | DELETE | `/admin/users/:id` | Delete user |
 
@@ -177,14 +174,14 @@ npm run test:e2e
 
 ```
 src/
-├── auth/          # Auth module — login, register, OAuth, JWT strategies, guards
-├── user/          # User module — profile, password change
-├── admin/         # Admin module — user management
-├── mail/          # Mail module — Resend email service
-├── prisma/        # Prisma service
+├── auth/          # Login, register, OAuth, JWT strategies, 2FA, cleanup job
+├── user/          # Profile, password change
+├── admin/         # User management
+├── mail/          # Resend email templates
+├── prisma/        # PrismaService
 └── libs/          # Shared utilities and validators
 prisma/
-├── schema.prisma  # Database schema
+├── schema.prisma  # User, Session, Account, Token models
 └── migrations/    # Migration history
 ```
 
