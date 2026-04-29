@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WorkspaceService } from './workspace.service';
@@ -21,5 +21,12 @@ export class WorkspaceController {
   @ApiResponse({ status: 201, description: 'Workspace created' })
   create(@Req() req: Request, @Body() dto: CreateWorkspaceDto) {
     return this.workspaceService.create((req.user as any).id, dto);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List workspaces for the current user' })
+  @ApiResponse({ status: 200, description: 'Returns all workspaces' })
+  findAll(@Req() req: Request) {
+    return this.workspaceService.findAll((req.user as any).id, (req.user as any).role);
   }
 }
