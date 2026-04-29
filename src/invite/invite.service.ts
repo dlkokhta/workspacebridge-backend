@@ -102,18 +102,17 @@ export class InviteService {
     if (invite.usedAt) throw new BadRequestException('Invite already used');
     if (invite.expiresAt < new Date()) throw new BadRequestException('Invite expired');
 
-    // For shareable links (no email), require the user to provide one — handled in controller via a different DTO if needed.
-    // Here we use the email stored on the invite.
-    if (!invite.email) throw new BadRequestException('This is a shareable link — use the link directly to set your email');
+    const resolvedEmail = invite.email ?? dto.email;
+    if (!resolvedEmail) throw new BadRequestException('Please provide your email address.');
 
-    const existing = await this.prisma.user.findUnique({ where: { email: invite.email } });
+    const existing = await this.prisma.user.findUnique({ where: { email: resolvedEmail } });
     if (existing) throw new BadRequestException('An account with this email already exists. Please log in instead.');
 
     const hashedPassword = await argon2.hash(dto.password);
 
     const user = await this.prisma.user.create({
       data: {
-        email: invite.email,
+        email: resolvedEmail,
         password: hashedPassword,
         role: UserRole.CLIENT,
         isVerified: true,
