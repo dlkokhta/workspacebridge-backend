@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WorkspaceService } from './workspace.service';
@@ -28,5 +28,14 @@ export class WorkspaceController {
   @ApiResponse({ status: 200, description: 'Returns all workspaces' })
   findAll(@Req() req: Request) {
     return this.workspaceService.findAll((req.user as any).id, (req.user as any).role);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get a single workspace by ID' })
+  @ApiResponse({ status: 200, description: 'Returns the workspace' })
+  @ApiResponse({ status: 404, description: 'Workspace not found' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  findOne(@Req() req: Request, @Param('id') id: string) {
+    return this.workspaceService.findOne(id, (req.user as any).id, (req.user as any).role);
   }
 }

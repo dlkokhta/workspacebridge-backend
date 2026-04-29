@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
@@ -36,5 +36,27 @@ export class WorkspaceService {
     });
 
     return memberships.map((m) => m.workspace);
+  }
+
+  async findOne(id: string, userId: string, role: UserRole) {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id },
+      include: {
+        members: {
+          include: { user: { select: { id: true, firstname: true, lastname: true, email: true, picture: true } } },
+        },
+      },
+    });
+
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    if (role === UserRole.FREELANCER || role === UserRole.ADMIN) {
+      if (workspace.ownerId !== userId) throw new ForbiddenException('Access denied');
+    } else {
+      const isMember = workspace.members.some((m) => m.userId === userId);
+      if (!isMember) throw new ForbiddenException('Access denied');
+    }
+
+    return workspace;
   }
 }
