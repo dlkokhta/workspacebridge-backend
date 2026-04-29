@@ -8,6 +8,7 @@ import { PrismaService } from './prisma/prisma.service';
 import { ConfigModule } from '@nestjs/config';
 import { MailModule } from './mail/mail.module';
 import { AdminModule } from './admin/admin.module';
+import { WorkspaceModule } from './workspace/workspace.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { Injectable } from '@nestjs/common';
@@ -48,6 +49,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     UserModule,
     MailModule,
     AdminModule,
+    WorkspaceModule,
   ],
   controllers: [AppController],
   providers: [
