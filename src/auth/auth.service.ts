@@ -41,6 +41,25 @@ export class AuthService {
 
   private static readonly MAX_FAILED_LOGIN_ATTEMPTS = 5;
   private static readonly LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+  private static readonly MAX_SESSIONS_PER_USER = 10;
+
+  private async enforceSessionLimit(userId: string) {
+    const sessions = await this.prismaService.session.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+
+    if (sessions.length >= AuthService.MAX_SESSIONS_PER_USER) {
+      const toDelete = sessions.slice(
+        0,
+        sessions.length - AuthService.MAX_SESSIONS_PER_USER + 1,
+      );
+      await this.prismaService.session.deleteMany({
+        where: { id: { in: toDelete.map((s) => s.id) } },
+      });
+    }
+  }
 
   private async registerFailedLogin(userId: string, currentAttempts: number) {
     const newAttempts = currentAttempts + 1;
@@ -128,6 +147,8 @@ export class AuthService {
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
+
+    await this.enforceSessionLimit(userExist.id);
 
     await this.prismaService.session.create({
       data: {
@@ -300,6 +321,8 @@ export class AuthService {
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
+
+    await this.enforceSessionLimit(userExist.id);
 
     await this.prismaService.session.create({
       data: {

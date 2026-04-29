@@ -165,6 +165,18 @@ export class TwoFactorAuthService {
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
 
+    const existingSessions = await this.prismaService.session.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    if (existingSessions.length >= 10) {
+      const toDelete = existingSessions.slice(0, existingSessions.length - 9);
+      await this.prismaService.session.deleteMany({
+        where: { id: { in: toDelete.map((s) => s.id) } },
+      });
+    }
+
     await this.prismaService.session.create({
       data: {
         id: sessionId,

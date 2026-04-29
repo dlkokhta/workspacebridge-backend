@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { TwoFactorAuthService } from './two-factor-auth.service';
+import { CleanupService } from './cleanup.service';
 import { UserModule } from '../user/user.module';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { JwtModule } from '@nestjs/jwt';
@@ -13,7 +14,14 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 
 @Module({
   controllers: [AuthController],
-  providers: [AuthService, TwoFactorAuthService, PrismaService, JwtStrategy, GoogleStrategy],
+  providers: [
+    AuthService,
+    TwoFactorAuthService,
+    CleanupService,
+    PrismaService,
+    JwtStrategy,
+    GoogleStrategy,
+  ],
   imports: [
     UserModule,
     PassportModule,

@@ -24,7 +24,7 @@ model User {
   failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
   lockedUntil         DateTime? @map("locked_until")
 
-  role UserRole @default(REGULAR)
+  role UserRole @default(FREELANCER)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -63,7 +63,10 @@ model Token {
   token     String    @unique
   type      TokenType
   expiresIn DateTime  @map("expires_in")
+  createdAt DateTime  @default(now()) @map("created_at")
 
+  @@index([email, type])
+  @@index([expiresIn])
   @@map("tokens")
 }
 
@@ -80,6 +83,8 @@ model Session {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@index([userId, createdAt])
+  @@index([expiresAt])
   @@map("sessions")
 }
 
@@ -89,7 +94,8 @@ model Item {
 }
 
 enum UserRole {
-  REGULAR
+  FREELANCER
+  CLIENT
   ADMIN
 }
 
