@@ -15,7 +15,7 @@
 
 ## What is this?
 
-The backend API for **WorkspaceBridge**, a freelancer–client collaboration platform. The current scope is a hardened authentication system with user management — the foundation that the rest of the product is being built on top of.
+The backend API for **WorkspaceBridge**, a freelancer–client collaboration platform. Freelancers create workspaces per client, invite them via magic link or email, and collaborate through messages, files, whiteboard, and shared links.
 
 ## Tech Stack
 
@@ -50,8 +50,21 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 - Account lockout after **5 failed login attempts** (15-minute cooldown)
 - Per-user **session cap of 10** — oldest session evicted on new login
 - Hourly **cleanup job** purges expired sessions and tokens
-- Per-endpoint rate limiting on auth flows (forgot-password, reset-password, verify-email)
-- 2FA pre-auth tokens cannot be used as access tokens (token-type confusion prevented)
+- Per-endpoint rate limiting on auth flows
+- 2FA pre-auth tokens cannot be used as access tokens
+
+### Workspace management
+- Freelancers create workspaces per client (name, description, color, status)
+- Status flow: `ACTIVE` → `COMPLETED` / `ARCHIVED`
+- Role-aware listing: freelancers see owned workspaces, clients see invited workspaces
+- Ownership checks on all mutating endpoints
+
+### Client invite flow
+- Generate shareable invite link (UUID token, 7-day expiry)
+- Send magic link email via Resend to a specific client email
+- Validate invite token — returns workspace info for the accept page
+- Accept invite — creates client account, adds to workspace as member, issues JWT tokens
+- Invite tokens are single-use (`usedAt` stamped on acceptance)
 
 ### User management
 - View / update profile (name)
@@ -81,16 +94,8 @@ APPLICATION_URL=http://localhost:4002
 ALLOWED_ORIGIN=http://localhost:5173
 FRONTEND_URL=http://localhost:5173
 
-# Cookies
-COOKIES_SECRET=your_cookies_secret
-
 # PostgreSQL
-POSTGRES_USER=your_postgres_user
-POSTGRES_PASSWORD=your_postgres_password
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5435
-POSTGRES_DB=your_db_name
-POSTGRES_URL=postgresql://your_postgres_user:your_postgres_password@localhost:5435/your_db_name
+POSTGRES_URL=postgresql://user:password@localhost:5435/workspacebridge
 
 # JWT
 JWT_SECRET=your_jwt_secret
@@ -162,6 +167,25 @@ npm run test:e2e   # end-to-end
 | PATCH | `/user/me` | Update name |
 | PATCH | `/user/me/password` | Change password |
 
+### Workspace (`/workspace`) — requires JWT
+
+| Method | Endpoint | Description | Role |
+|--------|----------|-------------|------|
+| POST | `/workspace` | Create a workspace | FREELANCER |
+| GET | `/workspace` | List workspaces (owned or invited) | Any |
+| GET | `/workspace/:id` | Get workspace detail with members | Any |
+| PATCH | `/workspace/:id` | Update name, description, color, status | FREELANCER |
+| DELETE | `/workspace/:id` | Delete workspace | FREELANCER |
+
+### Invite
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/workspace/:id/invite` | Send magic link email to client | JWT (FREELANCER) |
+| POST | `/workspace/:id/invite/link` | Generate shareable invite link | JWT (FREELANCER) |
+| GET | `/invite/:token` | Validate token, return workspace info | Public |
+| POST | `/invite/:token/accept` | Create client account + join workspace | Public |
+
 ### Admin (`/admin`) — requires JWT + `ADMIN` role
 
 | Method | Endpoint | Description |
@@ -170,6 +194,18 @@ npm run test:e2e   # end-to-end
 | PATCH | `/admin/users/:id/role` | Change user role |
 | DELETE | `/admin/users/:id` | Delete user |
 
+## Database Models
+
+| Model | Description |
+|-------|-------------|
+| `User` | Freelancers, clients, and admins |
+| `Session` | Refresh token sessions (argon2-hashed) |
+| `Account` | OAuth provider accounts |
+| `Token` | Email verification, password reset, 2FA tokens |
+| `Workspace` | Per-client project space owned by a freelancer |
+| `WorkspaceMember` | Links clients to workspaces |
+| `WorkspaceInvite` | Invite tokens (email or shareable link, single-use) |
+
 ## Project Structure
 
 ```
@@ -177,11 +213,13 @@ src/
 ├── auth/          # Login, register, OAuth, JWT strategies, 2FA, cleanup job
 ├── user/          # Profile, password change
 ├── admin/         # User management
+├── workspace/     # Workspace CRUD
+├── invite/        # Invite generation, email sending, accept flow
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
 └── libs/          # Shared utilities and validators
 prisma/
-├── schema.prisma  # User, Session, Account, Token models
+├── schema.prisma  # All models and enums
 └── migrations/    # Migration history
 ```
 
