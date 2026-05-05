@@ -88,4 +88,23 @@ export class WorkspaceService {
 
     return { message: 'Workspace deleted successfully' };
   }
+
+  async removeMember(workspaceId: string, memberId: string, requesterId: string) {
+    const workspace = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
+
+    if (!workspace) throw new NotFoundException('Workspace not found');
+    if (workspace.ownerId !== requesterId) throw new ForbiddenException('Access denied');
+
+    const member = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: memberId } },
+    });
+
+    if (!member) throw new NotFoundException('Member not found in this workspace');
+
+    await this.prisma.workspaceMember.delete({
+      where: { workspaceId_userId: { workspaceId, userId: memberId } },
+    });
+
+    return { message: 'Member removed successfully' };
+  }
 }

@@ -59,4 +59,14 @@ export class WorkspaceController {
   remove(@Req() req: Request, @Param('id') id: string) {
     return this.workspaceService.remove(id, (req.user as any).id);
   }
+
+  @Delete(':id/members/:userId')
+  @Roles(UserRole.FREELANCER)
+  @ApiOperation({ summary: 'Remove a member from a workspace' })
+  @ApiResponse({ status: 200, description: 'Member removed' })
+  @ApiResponse({ status: 404, description: 'Workspace or member not found' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  removeMember(@Req() req: Request, @Param('id') id: string, @Param('userId') userId: string) {
+    return this.workspaceService.removeMember(id, userId, (req.user as any).id);
+  }
 }
