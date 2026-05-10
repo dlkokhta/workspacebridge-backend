@@ -33,8 +33,9 @@ model User {
   Accounts Account[]
   Session  Session[]
 
-  ownedWorkspaces     Workspace[]       @relation("OwnedWorkspaces")
+  ownedWorkspaces      Workspace[]       @relation("OwnedWorkspaces")
   workspaceMemberships WorkspaceMember[] @relation("WorkspaceMemberships")
+  sentMessages         Message[]         @relation("SentMessages")
 
   @@map("users")
 }
@@ -101,13 +102,30 @@ model Workspace {
   ownerId String @map("owner_id")
   owner   User   @relation("OwnedWorkspaces", fields: [ownerId], references: [id])
 
-  members WorkspaceMember[]
-  invites WorkspaceInvite[]
+  members  WorkspaceMember[]
+  invites  WorkspaceInvite[]
+  messages Message[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("workspaces")
+}
+
+model Message {
+  id      String @id @default(uuid())
+  content String
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  senderId String @map("sender_id")
+  sender   User   @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([workspaceId, createdAt])
+  @@map("messages")
 }
 
 model WorkspaceInvite {
