@@ -10,6 +10,7 @@ import { MailModule } from './mail/mail.module';
 import { AdminModule } from './admin/admin.module';
 import { WorkspaceModule } from './workspace/workspace.module';
 import { InviteModule } from './invite/invite.module';
+import { MessageModule } from './message/message.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { Injectable } from '@nestjs/common';
@@ -52,6 +53,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     AdminModule,
     WorkspaceModule,
     InviteModule,
+    MessageModule,
   ],
   controllers: [AppController],
   providers: [
