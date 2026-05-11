@@ -1,3 +1,4 @@
+import { UsePipes, ValidationPipe } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -12,6 +13,8 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { MessageService } from './message.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { SendMessageDto } from './dto/send-message.dto';
+import { JoinRoomDto } from './dto/join-room.dto';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
@@ -22,7 +25,10 @@ interface AuthenticatedSocket extends Socket {
   cors: { origin: process.env.ALLOWED_ORIGIN, credentials: true },
   namespace: '/chat',
 })
-export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect {
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+export class MessageGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
@@ -64,9 +70,13 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
   @SubscribeMessage('joinRoom')
   async handleJoinRoom(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() workspaceId: string,
+    @MessageBody() body: JoinRoomDto,
   ) {
-    const isMember = await this.messageService.isWorkspaceMember(workspaceId, client.userId);
+    const { workspaceId } = body;
+    const isMember = await this.messageService.isWorkspaceMember(
+      workspaceId,
+      client.userId,
+    );
 
     if (!isMember) {
       client.emit('error', { message: 'Access denied' });
@@ -82,20 +92,28 @@ export class MessageGateway implements OnGatewayConnection, OnGatewayDisconnect 
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() body: { workspaceId: string; content: string },
+    @MessageBody() body: SendMessageDto,
   ) {
     const { workspaceId, content } = body;
+    const trimmed = content.trim();
 
-    if (!content?.trim()) return;
+    if (!trimmed) return;
 
-    const isMember = await this.messageService.isWorkspaceMember(workspaceId, client.userId);
+    const isMember = await this.messageService.isWorkspaceMember(
+      workspaceId,
+      client.userId,
+    );
 
     if (!isMember) {
       client.emit('error', { message: 'Access denied' });
       return;
     }
 
-    const message = await this.messageService.saveMessage(workspaceId, client.userId, content.trim());
+    const message = await this.messageService.saveMessage(
+      workspaceId,
+      client.userId,
+      trimmed,
+    );
 
     this.server.to(workspaceId).emit('newMessage', message);
   }
