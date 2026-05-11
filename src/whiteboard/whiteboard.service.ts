@@ -48,12 +48,20 @@ export class WhiteboardService {
 
   async persist(
     workspaceId: string,
-    payload: { elements: unknown[]; appState?: Record<string, unknown> },
+    payload: {
+      elements: unknown[];
+      appState?: Record<string, unknown>;
+      files?: Record<string, unknown>;
+    },
   ) {
     const appState =
       payload.appState === undefined
         ? Prisma.JsonNull
         : (payload.appState as Prisma.InputJsonValue);
+    const files =
+      payload.files === undefined
+        ? Prisma.JsonNull
+        : (payload.files as Prisma.InputJsonValue);
 
     return this.prisma.whiteboard.upsert({
       where: { workspaceId },
@@ -61,10 +69,12 @@ export class WhiteboardService {
         workspaceId,
         elements: payload.elements as Prisma.InputJsonValue,
         appState,
+        files,
       },
       update: {
         elements: payload.elements as Prisma.InputJsonValue,
         appState,
+        files,
       },
     });
   }

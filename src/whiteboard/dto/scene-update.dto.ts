@@ -10,4 +10,8 @@ export class SceneUpdateDto {
   @IsObject()
   @IsOptional()
   appState?: Record<string, unknown>;
+
+  @IsObject()
+  @IsOptional()
+  files?: Record<string, unknown>;
 }

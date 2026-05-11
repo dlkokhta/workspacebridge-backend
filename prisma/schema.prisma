@@ -137,6 +137,7 @@ model Whiteboard {
 
   elements Json  @default("[]")
   appState Json? @map("app_state")
+  files    Json? @map("files")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

@@ -25,6 +25,7 @@ interface AuthenticatedSocket extends Socket {
 type PendingPayload = {
   elements: unknown[];
   appState?: Record<string, unknown>;
+  files?: Record<string, unknown>;
 };
 
 const PERSIST_DEBOUNCE_MS = 2000;
@@ -126,7 +127,7 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: SceneUpdateDto,
   ) {
-    const { workspaceId, elements, appState } = body;
+    const { workspaceId, elements, appState, files } = body;
 
     const allowed = await this.whiteboardService.canAccess(
       workspaceId,
@@ -141,10 +142,11 @@ export class WhiteboardGateway
     client.to(workspaceId).emit('sceneUpdate', {
       elements,
       appState,
+      files,
       from: client.userId,
     });
 
-    this.schedulePersist(workspaceId, { elements, appState });
+    this.schedulePersist(workspaceId, { elements, appState, files });
   }
 
   @SubscribeMessage('pointerUpdate')
