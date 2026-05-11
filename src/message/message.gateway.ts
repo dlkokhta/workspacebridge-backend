@@ -15,6 +15,7 @@ import { MessageService } from './message.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
 import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
+import { LoadMoreMessagesDto } from './dto/load-more.dto';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
@@ -87,6 +88,26 @@ export class MessageGateway
 
     const history = await this.messageService.getMessages(workspaceId);
     client.emit('messageHistory', history);
+  }
+
+  @SubscribeMessage('loadMoreMessages')
+  async handleLoadMore(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: LoadMoreMessagesDto,
+  ) {
+    const { workspaceId, cursor } = body;
+    const isMember = await this.messageService.isWorkspaceMember(
+      workspaceId,
+      client.userId,
+    );
+
+    if (!isMember) {
+      client.emit('error', { message: 'Access denied' });
+      return;
+    }
+
+    const older = await this.messageService.getMessages(workspaceId, 50, cursor);
+    client.emit('olderMessages', older);
   }
 
   @SubscribeMessage('sendMessage')
