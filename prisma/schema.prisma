@@ -102,9 +102,10 @@ model Workspace {
   ownerId String @map("owner_id")
   owner   User   @relation("OwnedWorkspaces", fields: [ownerId], references: [id])
 
-  members  WorkspaceMember[]
-  invites  WorkspaceInvite[]
-  messages Message[]
+  members    WorkspaceMember[]
+  invites    WorkspaceInvite[]
+  messages   Message[]
+  whiteboard Whiteboard?
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -126,6 +127,21 @@ model Message {
 
   @@index([workspaceId, createdAt])
   @@map("messages")
+}
+
+model Whiteboard {
+  id String @id @default(uuid())
+
+  workspaceId String    @unique @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  elements Json  @default("[]")
+  appState Json? @map("app_state")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("whiteboards")
 }
 
 model WorkspaceInvite {
