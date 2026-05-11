@@ -11,6 +11,7 @@ import { AdminModule } from './admin/admin.module';
 import { WorkspaceModule } from './workspace/workspace.module';
 import { InviteModule } from './invite/invite.module';
 import { MessageModule } from './message/message.module';
+import { WhiteboardModule } from './whiteboard/whiteboard.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { Injectable } from '@nestjs/common';
@@ -54,6 +55,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     WorkspaceModule,
     InviteModule,
     MessageModule,
+    WhiteboardModule,
   ],
   controllers: [AppController],
   providers: [
