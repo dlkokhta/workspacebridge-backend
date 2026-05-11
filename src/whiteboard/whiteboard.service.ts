@@ -11,6 +11,21 @@ import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
 export class WhiteboardService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async canAccess(workspaceId: string, userId: string): Promise<boolean> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+    });
+
+    if (!workspace) return false;
+    if (workspace.ownerId === userId) return true;
+
+    const member = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+    });
+
+    return !!member;
+  }
+
   async assertAccess(workspaceId: string, userId: string, role: UserRole) {
     const workspace = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -31,9 +46,35 @@ export class WhiteboardService {
     if (!member) throw new ForbiddenException('Access denied');
   }
 
+  async persist(
+    workspaceId: string,
+    payload: { elements: unknown[]; appState?: Record<string, unknown> },
+  ) {
+    const appState =
+      payload.appState === undefined
+        ? Prisma.JsonNull
+        : (payload.appState as Prisma.InputJsonValue);
+
+    return this.prisma.whiteboard.upsert({
+      where: { workspaceId },
+      create: {
+        workspaceId,
+        elements: payload.elements as Prisma.InputJsonValue,
+        appState,
+      },
+      update: {
+        elements: payload.elements as Prisma.InputJsonValue,
+        appState,
+      },
+    });
+  }
+
   async getOrCreate(workspaceId: string, userId: string, role: UserRole) {
     await this.assertAccess(workspaceId, userId, role);
+    return this.getOrCreateForSocket(workspaceId);
+  }
 
+  async getOrCreateForSocket(workspaceId: string) {
     const existing = await this.prisma.whiteboard.findUnique({
       where: { workspaceId },
     });
@@ -52,23 +93,6 @@ export class WhiteboardService {
     dto: SaveWhiteboardDto,
   ) {
     await this.assertAccess(workspaceId, userId, role);
-
-    const appState =
-      dto.appState === undefined
-        ? Prisma.JsonNull
-        : (dto.appState as Prisma.InputJsonValue);
-
-    return this.prisma.whiteboard.upsert({
-      where: { workspaceId },
-      create: {
-        workspaceId,
-        elements: dto.elements as Prisma.InputJsonValue,
-        appState,
-      },
-      update: {
-        elements: dto.elements as Prisma.InputJsonValue,
-        appState,
-      },
-    });
+    return this.persist(workspaceId, dto);
   }
 }
