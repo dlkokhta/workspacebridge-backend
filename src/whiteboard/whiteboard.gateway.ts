@@ -76,6 +76,9 @@ export class WhiteboardGateway
 
   handleDisconnect(client: AuthenticatedSocket) {
     client.rooms.forEach((room) => {
+      if (room !== client.id && client.userId) {
+        client.to(room).emit('collaboratorLeft', { userId: client.userId });
+      }
       void client.leave(room);
     });
   }
