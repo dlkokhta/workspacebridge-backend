@@ -20,6 +20,8 @@ import { PointerUpdateDto } from './dto/pointer-update.dto';
 interface AuthenticatedSocket extends Socket {
   userId: string;
   userEmail: string;
+  firstname: string | null;
+  lastname: string | null;
 }
 
 type PendingPayload = {
@@ -70,6 +72,8 @@ export class WhiteboardGateway
 
       client.userId = payload.userId;
       client.userEmail = payload.email;
+      client.firstname = null;
+      client.lastname = null;
     } catch {
       client.disconnect();
     }
@@ -112,6 +116,12 @@ export class WhiteboardGateway
 
     await client.join(workspaceId);
 
+    if (client.firstname === null && client.lastname === null) {
+      const profile = await this.whiteboardService.getUserName(client.userId);
+      client.firstname = profile?.firstname ?? null;
+      client.lastname = profile?.lastname ?? null;
+    }
+
     const board =
       await this.whiteboardService.getOrCreateForSocket(workspaceId);
     client.emit('boardState', board);
@@ -119,6 +129,8 @@ export class WhiteboardGateway
     client.to(workspaceId).emit('collaboratorJoined', {
       userId: client.userId,
       email: client.userEmail,
+      firstname: client.firstname,
+      lastname: client.lastname,
     });
   }
 
@@ -161,6 +173,8 @@ export class WhiteboardGateway
     client.to(workspaceId).emit('pointerUpdate', {
       userId: client.userId,
       email: client.userEmail,
+      firstname: client.firstname,
+      lastname: client.lastname,
       pointer,
       button,
     });

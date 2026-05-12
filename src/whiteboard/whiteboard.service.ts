@@ -11,6 +11,13 @@ import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
 export class WhiteboardService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getUserName(userId: string) {
+    return this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { firstname: true, lastname: true },
+    });
+  }
+
   async canAccess(workspaceId: string, userId: string): Promise<boolean> {
     const workspace = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
