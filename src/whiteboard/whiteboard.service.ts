@@ -147,6 +147,31 @@ export class WhiteboardService {
     });
   }
 
+  async duplicate(boardId: string, userId: string) {
+    const allowed = await this.canAccessBoard(boardId, userId);
+    if (!allowed) throw new ForbiddenException('Access denied');
+    const source = await this.prisma.whiteboard.findUnique({
+      where: { id: boardId },
+    });
+    if (!source) throw new NotFoundException('Whiteboard not found');
+    return this.prisma.whiteboard.create({
+      data: {
+        workspaceId: source.workspaceId,
+        name: `${source.name} (copy)`.slice(0, 100),
+        elements: source.elements as Prisma.InputJsonValue,
+        appState:
+          source.appState === null
+            ? Prisma.JsonNull
+            : (source.appState as Prisma.InputJsonValue),
+        files:
+          source.files === null
+            ? Prisma.JsonNull
+            : (source.files as Prisma.InputJsonValue),
+      },
+      select: { id: true, name: true, updatedAt: true, createdAt: true },
+    });
+  }
+
   async delete(boardId: string, userId: string) {
     const board = await this.prisma.whiteboard.findUnique({
       where: { id: boardId },

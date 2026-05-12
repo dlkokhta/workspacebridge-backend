@@ -92,6 +92,16 @@ export class WhiteboardController {
     return this.whiteboardService.rename(boardId, user.id, dto);
   }
 
+  @Post('whiteboards/:boardId/duplicate')
+  @ApiOperation({ summary: 'Duplicate a whiteboard' })
+  @ApiResponse({ status: 201, description: 'Whiteboard duplicated' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Whiteboard not found' })
+  duplicate(@Req() req: Request, @Param('boardId') boardId: string) {
+    const user = req.user as RequestUser;
+    return this.whiteboardService.duplicate(boardId, user.id);
+  }
+
   @Delete('whiteboards/:boardId')
   @ApiOperation({ summary: 'Delete a whiteboard (workspace owner only)' })
   @ApiResponse({ status: 200, description: 'Whiteboard deleted' })
