@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -18,6 +19,7 @@ import {
 import { WhiteboardService } from './whiteboard.service';
 import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
 import { CreateWhiteboardDto } from './dto/create-whiteboard.dto';
+import { RenameWhiteboardDto } from './dto/rename-whiteboard.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UserRole } from '@prisma/client';
 
@@ -74,5 +76,29 @@ export class WhiteboardController {
   ) {
     const user = req.user as RequestUser;
     return this.whiteboardService.save(boardId, user.id, dto);
+  }
+
+  @Patch('whiteboards/:boardId/rename')
+  @ApiOperation({ summary: 'Rename a whiteboard' })
+  @ApiResponse({ status: 200, description: 'Whiteboard renamed' })
+  @ApiResponse({ status: 403, description: 'Access denied' })
+  @ApiResponse({ status: 404, description: 'Whiteboard not found' })
+  rename(
+    @Req() req: Request,
+    @Param('boardId') boardId: string,
+    @Body() dto: RenameWhiteboardDto,
+  ) {
+    const user = req.user as RequestUser;
+    return this.whiteboardService.rename(boardId, user.id, dto);
+  }
+
+  @Delete('whiteboards/:boardId')
+  @ApiOperation({ summary: 'Delete a whiteboard (workspace owner only)' })
+  @ApiResponse({ status: 200, description: 'Whiteboard deleted' })
+  @ApiResponse({ status: 403, description: 'Only the workspace owner can delete' })
+  @ApiResponse({ status: 404, description: 'Whiteboard not found' })
+  remove(@Req() req: Request, @Param('boardId') boardId: string) {
+    const user = req.user as RequestUser;
+    return this.whiteboardService.delete(boardId, user.id);
   }
 }

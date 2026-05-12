@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,6 +8,7 @@ import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
 import { CreateWhiteboardDto } from './dto/create-whiteboard.dto';
+import { RenameWhiteboardDto } from './dto/rename-whiteboard.dto';
 
 @Injectable()
 export class WhiteboardService {
@@ -131,5 +133,29 @@ export class WhiteboardService {
     const allowed = await this.canAccessBoard(boardId, userId);
     if (!allowed) throw new ForbiddenException('Access denied');
     return this.persist(boardId, dto);
+  }
+
+  async rename(boardId: string, userId: string, dto: RenameWhiteboardDto) {
+    const allowed = await this.canAccessBoard(boardId, userId);
+    if (!allowed) throw new ForbiddenException('Access denied');
+    const name = dto.name.trim();
+    if (!name) throw new BadRequestException('Name cannot be empty');
+    return this.prisma.whiteboard.update({
+      where: { id: boardId },
+      data: { name },
+      select: { id: true, name: true, updatedAt: true },
+    });
+  }
+
+  async delete(boardId: string, userId: string) {
+    const board = await this.prisma.whiteboard.findUnique({
+      where: { id: boardId },
+      select: { workspace: { select: { id: true, ownerId: true } } },
+    });
+    if (!board) throw new NotFoundException('Whiteboard not found');
+    if (board.workspace.ownerId !== userId)
+      throw new ForbiddenException('Only the workspace owner can delete');
+    await this.prisma.whiteboard.delete({ where: { id: boardId } });
+    return { id: boardId };
   }
 }
