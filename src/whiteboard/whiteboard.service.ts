@@ -6,6 +6,7 @@ import {
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
+import { CreateWhiteboardDto } from './dto/create-whiteboard.dto';
 
 @Injectable()
 export class WhiteboardService {
@@ -18,22 +19,11 @@ export class WhiteboardService {
     });
   }
 
-  async canAccess(workspaceId: string, userId: string): Promise<boolean> {
-    const workspace = await this.prisma.workspace.findUnique({
-      where: { id: workspaceId },
-    });
-
-    if (!workspace) return false;
-    if (workspace.ownerId === userId) return true;
-
-    const member = await this.prisma.workspaceMember.findUnique({
-      where: { workspaceId_userId: { workspaceId, userId } },
-    });
-
-    return !!member;
-  }
-
-  async assertAccess(workspaceId: string, userId: string, role: UserRole) {
+  async assertWorkspaceAccess(
+    workspaceId: string,
+    userId: string,
+    role: UserRole,
+  ) {
     const workspace = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
     });
@@ -53,8 +43,65 @@ export class WhiteboardService {
     if (!member) throw new ForbiddenException('Access denied');
   }
 
-  async persist(
+  async canAccessBoard(boardId: string, userId: string): Promise<boolean> {
+    const board = await this.prisma.whiteboard.findUnique({
+      where: { id: boardId },
+      select: { workspace: { select: { id: true, ownerId: true } } },
+    });
+
+    if (!board) return false;
+    if (board.workspace.ownerId === userId) return true;
+
+    const member = await this.prisma.workspaceMember.findUnique({
+      where: {
+        workspaceId_userId: { workspaceId: board.workspace.id, userId },
+      },
+    });
+
+    return !!member;
+  }
+
+  async list(workspaceId: string, userId: string, role: UserRole) {
+    await this.assertWorkspaceAccess(workspaceId, userId, role);
+    return this.prisma.whiteboard.findMany({
+      where: { workspaceId },
+      select: { id: true, name: true, updatedAt: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async create(
     workspaceId: string,
+    userId: string,
+    role: UserRole,
+    dto: CreateWhiteboardDto,
+  ) {
+    await this.assertWorkspaceAccess(workspaceId, userId, role);
+    return this.prisma.whiteboard.create({
+      data: {
+        workspaceId,
+        name: dto.name?.trim() || 'Untitled board',
+        elements: [],
+      },
+    });
+  }
+
+  async getByIdForSocket(boardId: string) {
+    return this.prisma.whiteboard.findUnique({ where: { id: boardId } });
+  }
+
+  async getById(boardId: string, userId: string) {
+    const allowed = await this.canAccessBoard(boardId, userId);
+    if (!allowed) throw new ForbiddenException('Access denied');
+    const board = await this.prisma.whiteboard.findUnique({
+      where: { id: boardId },
+    });
+    if (!board) throw new NotFoundException('Whiteboard not found');
+    return board;
+  }
+
+  async persist(
+    boardId: string,
     payload: {
       elements: unknown[];
       appState?: Record<string, unknown>;
@@ -70,15 +117,9 @@ export class WhiteboardService {
         ? Prisma.JsonNull
         : (payload.files as Prisma.InputJsonValue);
 
-    return this.prisma.whiteboard.upsert({
-      where: { workspaceId },
-      create: {
-        workspaceId,
-        elements: payload.elements as Prisma.InputJsonValue,
-        appState,
-        files,
-      },
-      update: {
+    return this.prisma.whiteboard.update({
+      where: { id: boardId },
+      data: {
         elements: payload.elements as Prisma.InputJsonValue,
         appState,
         files,
@@ -86,30 +127,9 @@ export class WhiteboardService {
     });
   }
 
-  async getOrCreate(workspaceId: string, userId: string, role: UserRole) {
-    await this.assertAccess(workspaceId, userId, role);
-    return this.getOrCreateForSocket(workspaceId);
-  }
-
-  async getOrCreateForSocket(workspaceId: string) {
-    const existing = await this.prisma.whiteboard.findUnique({
-      where: { workspaceId },
-    });
-
-    if (existing) return existing;
-
-    return this.prisma.whiteboard.create({
-      data: { workspaceId, elements: [] },
-    });
-  }
-
-  async save(
-    workspaceId: string,
-    userId: string,
-    role: UserRole,
-    dto: SaveWhiteboardDto,
-  ) {
-    await this.assertAccess(workspaceId, userId, role);
-    return this.persist(workspaceId, dto);
+  async save(boardId: string, userId: string, dto: SaveWhiteboardDto) {
+    const allowed = await this.canAccessBoard(boardId, userId);
+    if (!allowed) throw new ForbiddenException('Access denied');
+    return this.persist(boardId, dto);
   }
 }

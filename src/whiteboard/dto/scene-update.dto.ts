@@ -2,7 +2,7 @@ import { IsArray, IsObject, IsOptional, IsUUID } from 'class-validator';
 
 export class SceneUpdateDto {
   @IsUUID()
-  workspaceId: string;
+  boardId: string;
 
   @IsArray()
   elements: unknown[];

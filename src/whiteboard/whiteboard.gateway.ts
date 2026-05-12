@@ -89,10 +89,10 @@ export class WhiteboardGateway
   }
 
   async onModuleDestroy() {
-    for (const [workspaceId, timer] of this.pendingTimers.entries()) {
+    for (const [boardId, timer] of this.pendingTimers.entries()) {
       clearTimeout(timer);
-      const payload = this.pendingPayloads.get(workspaceId);
-      if (payload) await this.whiteboardService.persist(workspaceId, payload);
+      const payload = this.pendingPayloads.get(boardId);
+      if (payload) await this.whiteboardService.persist(boardId, payload);
     }
     this.pendingTimers.clear();
     this.pendingPayloads.clear();
@@ -103,9 +103,9 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: JoinBoardDto,
   ) {
-    const { workspaceId } = body;
-    const allowed = await this.whiteboardService.canAccess(
-      workspaceId,
+    const { boardId } = body;
+    const allowed = await this.whiteboardService.canAccessBoard(
+      boardId,
       client.userId,
     );
 
@@ -114,7 +114,7 @@ export class WhiteboardGateway
       return;
     }
 
-    await client.join(workspaceId);
+    await client.join(boardId);
 
     if (client.firstname === null && client.lastname === null) {
       const profile = await this.whiteboardService.getUserName(client.userId);
@@ -122,11 +122,10 @@ export class WhiteboardGateway
       client.lastname = profile?.lastname ?? null;
     }
 
-    const board =
-      await this.whiteboardService.getOrCreateForSocket(workspaceId);
+    const board = await this.whiteboardService.getByIdForSocket(boardId);
     client.emit('boardState', board);
 
-    client.to(workspaceId).emit('collaboratorJoined', {
+    client.to(boardId).emit('collaboratorJoined', {
       userId: client.userId,
       email: client.userEmail,
       firstname: client.firstname,
@@ -139,10 +138,10 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: SceneUpdateDto,
   ) {
-    const { workspaceId, elements, appState, files } = body;
+    const { boardId, elements, appState, files } = body;
 
-    const allowed = await this.whiteboardService.canAccess(
-      workspaceId,
+    const allowed = await this.whiteboardService.canAccessBoard(
+      boardId,
       client.userId,
     );
 
@@ -151,14 +150,14 @@ export class WhiteboardGateway
       return;
     }
 
-    client.to(workspaceId).emit('sceneUpdate', {
+    client.to(boardId).emit('sceneUpdate', {
       elements,
       appState,
       files,
       from: client.userId,
     });
 
-    this.schedulePersist(workspaceId, { elements, appState, files });
+    this.schedulePersist(boardId, { elements, appState, files });
   }
 
   @SubscribeMessage('pointerUpdate')
@@ -166,11 +165,11 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: PointerUpdateDto,
   ) {
-    const { workspaceId, pointer, button } = body;
+    const { boardId, pointer, button } = body;
 
-    if (!client.rooms.has(workspaceId)) return;
+    if (!client.rooms.has(boardId)) return;
 
-    client.to(workspaceId).emit('pointerUpdate', {
+    client.to(boardId).emit('pointerUpdate', {
       userId: client.userId,
       email: client.userEmail,
       firstname: client.firstname,
@@ -180,20 +179,20 @@ export class WhiteboardGateway
     });
   }
 
-  private schedulePersist(workspaceId: string, payload: PendingPayload) {
-    this.pendingPayloads.set(workspaceId, payload);
+  private schedulePersist(boardId: string, payload: PendingPayload) {
+    this.pendingPayloads.set(boardId, payload);
 
-    const existing = this.pendingTimers.get(workspaceId);
+    const existing = this.pendingTimers.get(boardId);
     if (existing) clearTimeout(existing);
 
     const timer = setTimeout(() => {
-      const latest = this.pendingPayloads.get(workspaceId);
-      this.pendingTimers.delete(workspaceId);
-      this.pendingPayloads.delete(workspaceId);
+      const latest = this.pendingPayloads.get(boardId);
+      this.pendingTimers.delete(boardId);
+      this.pendingPayloads.delete(boardId);
       if (!latest) return;
-      void this.whiteboardService.persist(workspaceId, latest);
+      void this.whiteboardService.persist(boardId, latest);
     }, PERSIST_DEBOUNCE_MS);
 
-    this.pendingTimers.set(workspaceId, timer);
+    this.pendingTimers.set(boardId, timer);
   }
 }

@@ -16,7 +16,7 @@ class Pointer {
 
 export class PointerUpdateDto {
   @IsUUID()
-  workspaceId: string;
+  boardId: string;
 
   @IsObject()
   pointer: Pointer;
