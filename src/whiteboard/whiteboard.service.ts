@@ -79,11 +79,17 @@ export class WhiteboardService {
     dto: CreateWhiteboardDto,
   ) {
     await this.assertWorkspaceAccess(workspaceId, userId, role);
+    const elements = (dto.elements ?? []) as Prisma.InputJsonValue;
+    const appState =
+      dto.appState === undefined
+        ? Prisma.JsonNull
+        : (dto.appState as Prisma.InputJsonValue);
     return this.prisma.whiteboard.create({
       data: {
         workspaceId,
         name: dto.name?.trim() || 'Untitled board',
-        elements: [],
+        elements,
+        appState,
       },
     });
   }
