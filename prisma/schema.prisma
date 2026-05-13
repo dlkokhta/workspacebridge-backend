@@ -33,9 +33,10 @@ model User {
   Accounts Account[]
   Session  Session[]
 
-  ownedWorkspaces      Workspace[]       @relation("OwnedWorkspaces")
-  workspaceMemberships WorkspaceMember[] @relation("WorkspaceMemberships")
-  sentMessages         Message[]         @relation("SentMessages")
+  ownedWorkspaces      Workspace[]         @relation("OwnedWorkspaces")
+  workspaceMemberships WorkspaceMember[]   @relation("WorkspaceMemberships")
+  sentMessages         Message[]           @relation("SentMessages")
+  whiteboardComments   WhiteboardComment[] @relation("WhiteboardComments")
 
   @@map("users")
 }
@@ -141,11 +142,33 @@ model Whiteboard {
   appState Json? @map("app_state")
   files    Json? @map("files")
 
+  comments WhiteboardComment[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([workspaceId])
   @@map("whiteboards")
+}
+
+model WhiteboardComment {
+  id String @id @default(uuid())
+
+  whiteboardId String     @map("whiteboard_id")
+  whiteboard   Whiteboard @relation(fields: [whiteboardId], references: [id], onDelete: Cascade)
+
+  elementId String @map("element_id")
+
+  authorId String @map("author_id")
+  author   User   @relation("WhiteboardComments", fields: [authorId], references: [id], onDelete: Cascade)
+
+  body String @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([whiteboardId, elementId])
+  @@map("whiteboard_comments")
 }
 
 model WorkspaceInvite {
@@ -166,7 +189,7 @@ model WorkspaceInvite {
 }
 
 model WorkspaceMember {
-  id   String @id @default(uuid())
+  id   String              @id @default(uuid())
   role WorkspaceMemberRole @default(CLIENT)
 
   workspaceId String    @map("workspace_id")
