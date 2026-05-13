@@ -187,6 +187,17 @@ export class WhiteboardGateway
     this.server.to(boardId).emit('commentDeleted', { id: commentId, boardId });
   }
 
+  broadcastBoardRestored(
+    boardId: string,
+    payload: {
+      elements: unknown;
+      appState: unknown;
+      files: unknown;
+    },
+  ) {
+    this.server.to(boardId).emit('boardRestored', { boardId, ...payload });
+  }
+
   private schedulePersist(boardId: string, payload: PendingPayload) {
     this.pendingPayloads.set(boardId, payload);
 

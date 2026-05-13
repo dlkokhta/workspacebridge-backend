@@ -3,8 +3,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { WhiteboardController } from './whiteboard.controller';
 import { WhiteboardCommentController } from './whiteboard-comment.controller';
+import { WhiteboardVersionController } from './whiteboard-version.controller';
 import { WhiteboardService } from './whiteboard.service';
 import { WhiteboardCommentService } from './whiteboard-comment.service';
+import { WhiteboardVersionService } from './whiteboard-version.service';
 import { WhiteboardGateway } from './whiteboard.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
 
@@ -18,8 +20,21 @@ import { PrismaModule } from '../prisma/prisma.module';
       }),
     }),
   ],
-  controllers: [WhiteboardController, WhiteboardCommentController],
-  providers: [WhiteboardService, WhiteboardCommentService, WhiteboardGateway],
-  exports: [WhiteboardService, WhiteboardCommentService],
+  controllers: [
+    WhiteboardController,
+    WhiteboardCommentController,
+    WhiteboardVersionController,
+  ],
+  providers: [
+    WhiteboardService,
+    WhiteboardCommentService,
+    WhiteboardVersionService,
+    WhiteboardGateway,
+  ],
+  exports: [
+    WhiteboardService,
+    WhiteboardCommentService,
+    WhiteboardVersionService,
+  ],
 })
 export class WhiteboardModule {}
