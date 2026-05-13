@@ -1,11 +1,14 @@
 import {
   BadRequestException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhiteboardService } from './whiteboard.service';
+import { WhiteboardGateway } from './whiteboard.gateway';
 import { CreateWhiteboardCommentDto } from './dto/create-whiteboard-comment.dto';
 
 const AUTHOR_SELECT = {
@@ -21,6 +24,8 @@ export class WhiteboardCommentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly whiteboardService: WhiteboardService,
+    @Inject(forwardRef(() => WhiteboardGateway))
+    private readonly gateway: WhiteboardGateway,
   ) {}
 
   async list(boardId: string, userId: string) {
@@ -48,7 +53,7 @@ export class WhiteboardCommentService {
     if (!allowed) throw new ForbiddenException('Access denied');
     const body = dto.body.trim();
     if (!body) throw new BadRequestException('Comment body cannot be empty');
-    return this.prisma.whiteboardComment.create({
+    const created = await this.prisma.whiteboardComment.create({
       data: {
         whiteboardId: boardId,
         elementId: dto.elementId,
@@ -57,6 +62,8 @@ export class WhiteboardCommentService {
       },
       include: { author: { select: AUTHOR_SELECT } },
     });
+    this.gateway.broadcastCommentCreated(boardId, created);
+    return created;
   }
 
   async delete(commentId: string, userId: string) {
@@ -69,6 +76,7 @@ export class WhiteboardCommentService {
       throw new ForbiddenException('Only the author can delete this comment');
     }
     await this.prisma.whiteboardComment.delete({ where: { id: commentId } });
+    this.gateway.broadcastCommentDeleted(comment.whiteboardId, comment.id);
     return { id: comment.id, whiteboardId: comment.whiteboardId };
   }
 }

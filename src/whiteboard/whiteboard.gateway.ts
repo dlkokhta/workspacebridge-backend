@@ -179,6 +179,14 @@ export class WhiteboardGateway
     });
   }
 
+  broadcastCommentCreated(boardId: string, comment: unknown) {
+    this.server.to(boardId).emit('commentCreated', comment);
+  }
+
+  broadcastCommentDeleted(boardId: string, commentId: string) {
+    this.server.to(boardId).emit('commentDeleted', { id: commentId, boardId });
+  }
+
   private schedulePersist(boardId: string, payload: PendingPayload) {
     this.pendingPayloads.set(boardId, payload);
 
