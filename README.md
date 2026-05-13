@@ -24,6 +24,8 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 | Framework | NestJS (Node.js) |
 | Language | TypeScript |
 | Database | PostgreSQL + Prisma ORM |
+| Realtime | Socket.IO (chat, whiteboard sync, presence) |
+| File storage | Cloudinary |
 | Auth | JWT (access + refresh), Google OAuth 2.0, TOTP 2FA |
 | Password hashing | Argon2 |
 | Email | Resend |
@@ -72,6 +74,19 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 - Admin panel — list users, change role, delete user, pagination
 - Role-based access control: `FREELANCER` / `CLIENT` / `ADMIN`
 
+### Messaging
+- Realtime chat per workspace via Socket.IO
+- Persistent message history (paginated REST loader)
+- Sender info embedded in each message (name, avatar)
+
+### Whiteboard collaboration
+- Multiple boards per workspace — create / rename / duplicate / delete
+- Realtime multi-user editing on Excalidraw scenes (debounced sync, server-side persistence)
+- Live remote cursors with author name and color
+- **15 starter templates** — Blank, Brainstorm, Sticky notes, Mood board, Kanban, Timeline, 2×2 Matrix, Retro, Flowchart, User journey, Wireframe, System architecture, Database schema, API sequence, State machine
+- **Comments on shapes** — pin notes to any Excalidraw element, scoped per author, broadcast over socket
+- **Version history** — manual snapshots with optional labels, read-only preview, restore with automatic safety snapshot of the current state, live re-sync to all collaborators
+
 ## Getting Started
 
 ### Prerequisites
@@ -110,6 +125,11 @@ GOOGLE_CALLBACK_URL=http://localhost:4002/auth/google/callback
 # Resend (email)
 RESEND_API_KEY=your_resend_api_key
 RESEND_FROM_EMAIL=noreply@yourdomain.com
+
+# Cloudinary (file storage)
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
 ```
 
 ### 3. Start the database
@@ -194,6 +214,67 @@ npm run test:e2e   # end-to-end
 | PATCH | `/admin/users/:id/role` | Change user role |
 | DELETE | `/admin/users/:id` | Delete user |
 
+### Messages (`/workspace/:workspaceId/messages`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workspace/:workspaceId/messages` | List messages (paginated, newest first) |
+
+### Whiteboards — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workspace/:workspaceId/whiteboards` | List boards in workspace |
+| POST | `/workspace/:workspaceId/whiteboards` | Create board (optionally seeded with template `elements`) |
+| GET | `/whiteboards/:boardId` | Get board snapshot |
+| PATCH | `/whiteboards/:boardId` | Save scene (elements, appState, files) |
+| PATCH | `/whiteboards/:boardId/rename` | Rename board |
+| POST | `/whiteboards/:boardId/duplicate` | Duplicate board |
+| DELETE | `/whiteboards/:boardId` | Delete board (workspace owner only) |
+
+### Whiteboard comments — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/whiteboards/:boardId/comments` | List shape comments for a board |
+| POST | `/whiteboards/:boardId/comments` | Add comment on a shape |
+| DELETE | `/whiteboards/:boardId/comments/:commentId` | Delete own comment |
+
+### Whiteboard versions — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/whiteboards/:boardId/versions` | List version snapshots (lightweight) |
+| GET | `/whiteboards/:boardId/versions/:versionId` | Get full version (elements, appState, files) |
+| POST | `/whiteboards/:boardId/versions` | Save manual snapshot of current scene |
+| POST | `/whiteboards/:boardId/versions/:versionId/restore` | Restore version (auto-snapshots current state first) |
+
+## Socket.IO
+
+Two namespaces, both authenticated via the JWT access token in the connection handshake (`auth.token`).
+
+### `/messages`
+
+| Event | Direction | Purpose |
+|---|---|---|
+| `joinRoom` | client → server | Join a workspace's chat room |
+| `sendMessage` | client → server | Send a message; persisted then broadcast |
+| `newMessage` | server → client | New message in room |
+
+### `/whiteboard`
+
+| Event | Direction | Purpose |
+|---|---|---|
+| `joinBoard` | client → server | Join a board room |
+| `boardState` | server → client | Initial scene on join |
+| `sceneUpdate` | bidirectional | Debounced scene diff (broadcast + persisted) |
+| `pointerUpdate` | bidirectional | Throttled cursor position |
+| `collaboratorJoined` | server → client | A user joined the board |
+| `collaboratorLeft` | server → client | A user left the board |
+| `commentCreated` | server → client | New shape comment |
+| `commentDeleted` | server → client | Comment deleted |
+| `boardRestored` | server → client | A version was restored — reload scene |
+
 ## Database Models
 
 | Model | Description |
@@ -205,6 +286,10 @@ npm run test:e2e   # end-to-end
 | `Workspace` | Per-client project space owned by a freelancer |
 | `WorkspaceMember` | Links clients to workspaces |
 | `WorkspaceInvite` | Invite tokens (email or shareable link, single-use) |
+| `Message` | Workspace chat messages |
+| `Whiteboard` | Excalidraw board with scene JSON |
+| `WhiteboardComment` | Comment pinned to an Excalidraw element |
+| `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
 
 ## Project Structure
 
@@ -215,6 +300,8 @@ src/
 ├── admin/         # User management
 ├── workspace/     # Workspace CRUD
 ├── invite/        # Invite generation, email sending, accept flow
+├── message/       # Workspace chat (REST history + Socket.IO gateway)
+├── whiteboard/    # Boards, realtime sync, comments, version snapshots
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
 └── libs/          # Shared utilities and validators
