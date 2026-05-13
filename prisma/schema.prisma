@@ -37,6 +37,7 @@ model User {
   workspaceMemberships WorkspaceMember[]   @relation("WorkspaceMemberships")
   sentMessages         Message[]           @relation("SentMessages")
   whiteboardComments   WhiteboardComment[] @relation("WhiteboardComments")
+  whiteboardVersions   WhiteboardVersion[] @relation("WhiteboardVersions")
 
   @@map("users")
 }
@@ -143,12 +144,35 @@ model Whiteboard {
   files    Json? @map("files")
 
   comments WhiteboardComment[]
+  versions WhiteboardVersion[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([workspaceId])
   @@map("whiteboards")
+}
+
+model WhiteboardVersion {
+  id String @id @default(uuid())
+
+  whiteboardId String     @map("whiteboard_id")
+  whiteboard   Whiteboard @relation(fields: [whiteboardId], references: [id], onDelete: Cascade)
+
+  elements Json  @default("[]")
+  appState Json? @map("app_state")
+  files    Json? @map("files")
+
+  label String?
+  type  WhiteboardVersionType @default(MANUAL)
+
+  createdById String @map("created_by_id")
+  createdBy   User   @relation("WhiteboardVersions", fields: [createdById], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([whiteboardId, createdAt])
+  @@map("whiteboard_versions")
 }
 
 model WhiteboardComment {
@@ -230,4 +254,9 @@ enum TokenType {
   VERIFICATION
   TWO_FACTOR
   PASSWORD_RESET
+}
+
+enum WhiteboardVersionType {
+  MANUAL
+  AUTO
 }
