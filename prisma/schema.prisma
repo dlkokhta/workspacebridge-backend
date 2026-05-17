@@ -25,6 +25,7 @@ model User {
   lockedUntil         DateTime? @map("locked_until")
 
   role UserRole @default(FREELANCER)
+  plan UserPlan @default(FREE)
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -38,6 +39,7 @@ model User {
   sentMessages         Message[]           @relation("SentMessages")
   whiteboardComments   WhiteboardComment[] @relation("WhiteboardComments")
   whiteboardVersions   WhiteboardVersion[] @relation("WhiteboardVersions")
+  uploadedFiles        File[]              @relation("UploadedFiles")
 
   @@map("users")
 }
@@ -108,6 +110,7 @@ model Workspace {
   invites     WorkspaceInvite[]
   messages    Message[]
   whiteboards Whiteboard[]
+  files       File[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -195,6 +198,29 @@ model WhiteboardComment {
   @@map("whiteboard_comments")
 }
 
+model File {
+  id String @id @default(uuid())
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  uploadedById String @map("uploaded_by_id")
+  uploadedBy   User   @relation("UploadedFiles", fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  name       String
+  mimeType   String @map("mime_type")
+  size       Int
+  storageKey String @unique @map("storage_key")
+
+  deletedAt DateTime? @map("deleted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([workspaceId, deletedAt, createdAt])
+  @@map("files")
+}
+
 model WorkspaceInvite {
   id    String  @id @default(uuid())
   token String  @unique @default(uuid())
@@ -243,6 +269,12 @@ enum UserRole {
   FREELANCER
   CLIENT
   ADMIN
+}
+
+enum UserPlan {
+  FREE
+  PRO
+  BUSINESS
 }
 
 enum AuthMethod {

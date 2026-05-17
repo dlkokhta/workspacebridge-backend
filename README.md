@@ -291,6 +291,32 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `WhiteboardComment` | Comment pinned to an Excalidraw element |
 | `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
 
+## File Storage Plans
+
+Per-plan file size and workspace storage limits (enforced server-side on upload):
+
+```ts
+// Per-file size limit by plan
+const FILE_SIZE_LIMITS = {
+  free: 25 * 1024 * 1024,       // 25 MB
+  pro: 100 * 1024 * 1024,       // 100 MB
+  business: 500 * 1024 * 1024,  // 500 MB
+};
+
+// Total workspace storage limit by plan
+const STORAGE_LIMITS = {
+  free: 500 * 1024 * 1024,         // 500 MB
+  pro: 10 * 1024 * 1024 * 1024,    // 10 GB
+  business: 50 * 1024 * 1024 * 1024, // 50 GB
+};
+```
+
+| Plan | Max file size | Max workspace storage |
+|------|---------------|-----------------------|
+| Free | 25 MB | 500 MB |
+| Pro | 100 MB | 10 GB |
+| Business | 500 MB | 50 GB |
+
 ## Project Structure
 
 ```
