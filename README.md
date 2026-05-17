@@ -130,6 +130,12 @@ RESEND_FROM_EMAIL=noreply@yourdomain.com
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_api_key
 CLOUDINARY_API_SECRET=your_api_secret
+
+# Cloudflare R2 (workspace file storage)
+R2_ACCOUNT_ID=your_cloudflare_account_id
+R2_ACCESS_KEY_ID=your_r2_access_key_id
+R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
+R2_BUCKET=workspacebridge-files
 ```
 
 ### 3. Start the database
