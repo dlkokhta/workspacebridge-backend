@@ -3,7 +3,6 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  NotImplementedException,
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
@@ -32,8 +31,24 @@ export class FileService {
     private readonly storage: StorageService,
   ) {}
 
-  list(_workspaceId: string, _userId: string, _userRole: UserRole) {
-    throw new NotImplementedException();
+  async list(workspaceId: string, userId: string, _userRole: UserRole) {
+    await this.ensureWorkspaceAccess(workspaceId, userId);
+
+    return this.prisma.file.findMany({
+      where: { workspaceId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        mimeType: true,
+        size: true,
+        createdAt: true,
+        updatedAt: true,
+        uploadedBy: {
+          select: { id: true, firstname: true, lastname: true, email: true },
+        },
+      },
+    });
   }
 
   async upload({ workspaceId, userId, file }: UploadParams) {
@@ -100,12 +115,54 @@ export class FileService {
     }
   }
 
-  getDownloadUrl(_fileId: string, _userId: string, _userRole: UserRole) {
-    throw new NotImplementedException();
+  async getDownloadUrl(fileId: string, userId: string, _userRole: UserRole) {
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: {
+        id: true,
+        name: true,
+        storageKey: true,
+        deletedAt: true,
+        workspaceId: true,
+      },
+    });
+    if (!file || file.deletedAt) {
+      throw new NotFoundException('File not found');
+    }
+    await this.ensureWorkspaceAccess(file.workspaceId, userId);
+
+    const url = await this.storage.getDownloadUrl(file.storageKey);
+    return { url, expiresIn: 600, name: file.name };
   }
 
-  remove(_fileId: string, _userId: string, _userRole: UserRole) {
-    throw new NotImplementedException();
+  async remove(fileId: string, userId: string, _userRole: UserRole) {
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: {
+        id: true,
+        uploadedById: true,
+        deletedAt: true,
+        workspaceId: true,
+        workspace: { select: { ownerId: true } },
+      },
+    });
+    if (!file || file.deletedAt) {
+      throw new NotFoundException('File not found');
+    }
+
+    const isUploader = file.uploadedById === userId;
+    const isWorkspaceOwner = file.workspace.ownerId === userId;
+    if (!isUploader && !isWorkspaceOwner) {
+      throw new ForbiddenException(
+        'Only the uploader or workspace owner can delete this file',
+      );
+    }
+
+    return this.prisma.file.update({
+      where: { id: fileId },
+      data: { deletedAt: new Date() },
+      select: { id: true, deletedAt: true },
+    });
   }
 
   private async ensureWorkspaceAccess(
