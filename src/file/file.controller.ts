@@ -40,7 +40,11 @@ export class FileController {
   }
 
   @Post('workspace/:workspaceId/files')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 500 * 1024 * 1024 },
+    }),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file to a workspace' })
   @ApiResponse({ status: 201, description: 'File uploaded' })
