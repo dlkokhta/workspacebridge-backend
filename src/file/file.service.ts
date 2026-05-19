@@ -18,6 +18,7 @@ import {
   STORAGE_LIMITS,
   TEXT_BASED_EXTENSIONS,
   TEXT_BASED_MIME_TYPES,
+  TRASH_RETENTION_DAYS,
 } from './file.constants';
 
 const NULL_BYTE_SAMPLE_SIZE = 8192;
@@ -154,6 +155,103 @@ export class FileService {
 
     const url = await this.storage.getDownloadUrl(file.storageKey);
     return { url, expiresIn: 600, name: file.name };
+  }
+
+  async listTrash(workspaceId: string, userId: string, _userRole: UserRole) {
+    await this.ensureWorkspaceAccess(workspaceId, userId);
+
+    const cutoff = new Date(
+      Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    return this.prisma.file.findMany({
+      where: {
+        workspaceId,
+        deletedAt: { not: null, gte: cutoff },
+      },
+      orderBy: { deletedAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        mimeType: true,
+        size: true,
+        createdAt: true,
+        updatedAt: true,
+        deletedAt: true,
+        uploadedBy: {
+          select: { id: true, firstname: true, lastname: true, email: true },
+        },
+      },
+    });
+  }
+
+  async restore(fileId: string, userId: string, _userRole: UserRole) {
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: {
+        id: true,
+        size: true,
+        uploadedById: true,
+        deletedAt: true,
+        workspaceId: true,
+        workspace: { select: { ownerId: true } },
+      },
+    });
+    if (!file || !file.deletedAt) {
+      throw new NotFoundException('File not found');
+    }
+
+    const cutoff = new Date(
+      Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+    if (file.deletedAt < cutoff) {
+      throw new NotFoundException('File not found');
+    }
+
+    const isUploader = file.uploadedById === userId;
+    const isWorkspaceOwner = file.workspace.ownerId === userId;
+    if (!isUploader && !isWorkspaceOwner) {
+      throw new ForbiddenException(
+        'Only the uploader or workspace owner can restore this file',
+      );
+    }
+
+    const owner = await this.prisma.user.findUniqueOrThrow({
+      where: { id: file.workspace.ownerId },
+      select: { plan: true },
+    });
+    const storageLimit = STORAGE_LIMITS[owner.plan];
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${file.workspaceId}))`;
+
+      const { _sum } = await tx.file.aggregate({
+        where: { workspaceId: file.workspaceId, deletedAt: null },
+        _sum: { size: true },
+      });
+      const currentUsage = _sum.size ?? 0;
+      if (currentUsage + file.size > storageLimit) {
+        throw new PayloadTooLargeException(
+          `Restoring this file would exceed the workspace storage limit of ${this.formatBytes(storageLimit)}`,
+        );
+      }
+
+      return tx.file.update({
+        where: { id: fileId },
+        data: { deletedAt: null },
+        select: {
+          id: true,
+          name: true,
+          mimeType: true,
+          size: true,
+          createdAt: true,
+          updatedAt: true,
+          uploadedBy: {
+            select: { id: true, firstname: true, lastname: true, email: true },
+          },
+        },
+      });
+    });
   }
 
   async remove(fileId: string, userId: string, _userRole: UserRole) {

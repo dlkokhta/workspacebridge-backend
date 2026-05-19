@@ -39,6 +39,22 @@ export class FileController {
     return this.fileService.list(workspaceId, user.id, user.role);
   }
 
+  @Get('workspace/:workspaceId/files/trash')
+  @ApiOperation({ summary: 'List soft-deleted files within the 30-day window' })
+  @ApiResponse({ status: 200, description: 'Returns trashed files with deletedAt' })
+  listTrash(@Req() req: Request, @Param('workspaceId') workspaceId: string) {
+    const user = req.user as RequestUser;
+    return this.fileService.listTrash(workspaceId, user.id, user.role);
+  }
+
+  @Post('files/:id/restore')
+  @ApiOperation({ summary: 'Restore a soft-deleted file' })
+  @ApiResponse({ status: 201, description: 'File restored' })
+  restore(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as RequestUser;
+    return this.fileService.restore(id, user.id, user.role);
+  }
+
   @Post('workspace/:workspaceId/files')
   @UseInterceptors(
     FileInterceptor('file', {

@@ -1,6 +1,12 @@
 import { UserPlan } from '@prisma/client';
 
 /**
+ * Days a soft-deleted file stays recoverable before the cron worker
+ * removes it from R2 and the database.
+ */
+export const TRASH_RETENTION_DAYS = 30;
+
+/**
  * Maximum single file size (bytes) by user plan.
  * Mirrors the table in README.md → File Storage Plans.
  */
