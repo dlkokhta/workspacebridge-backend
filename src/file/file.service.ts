@@ -82,9 +82,9 @@ export class FileService {
       );
     }
 
-    const usage = await this.getWorkspaceUsage(workspaceId);
     const storageLimit = STORAGE_LIMITS[owner.plan];
-    if (usage + file.size > storageLimit) {
+    const preCheckUsage = await this.getWorkspaceUsage(workspaceId);
+    if (preCheckUsage + file.size > storageLimit) {
       throw new PayloadTooLargeException(
         `Workspace storage limit of ${this.formatBytes(storageLimit)} would be exceeded`,
       );
@@ -96,21 +96,39 @@ export class FileService {
     await this.storage.upload(storageKey, file.buffer, verifiedMimeType);
 
     try {
-      return await this.prisma.file.create({
-        data: {
-          id: fileId,
-          workspaceId,
-          uploadedById: userId,
-          name: file.originalname,
-          mimeType: verifiedMimeType,
-          size: file.size,
-          storageKey,
-        },
-        include: {
-          uploadedBy: {
-            select: { id: true, firstname: true, lastname: true, email: true },
+      return await this.prisma.$transaction(async (tx) => {
+        // Per-workspace advisory lock: concurrent uploads to the same
+        // workspace serialize here so the quota check sees a consistent
+        // total. Different workspaces don't block each other.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
+
+        const { _sum } = await tx.file.aggregate({
+          where: { workspaceId, deletedAt: null },
+          _sum: { size: true },
+        });
+        const currentUsage = _sum.size ?? 0;
+        if (currentUsage + file.size > storageLimit) {
+          throw new PayloadTooLargeException(
+            `Workspace storage limit of ${this.formatBytes(storageLimit)} would be exceeded`,
+          );
+        }
+
+        return tx.file.create({
+          data: {
+            id: fileId,
+            workspaceId,
+            uploadedById: userId,
+            name: file.originalname,
+            mimeType: verifiedMimeType,
+            size: file.size,
+            storageKey,
           },
-        },
+          include: {
+            uploadedBy: {
+              select: { id: true, firstname: true, lastname: true, email: true },
+            },
+          },
+        });
       });
     } catch (error) {
       await this.storage.delete(storageKey).catch(() => undefined);

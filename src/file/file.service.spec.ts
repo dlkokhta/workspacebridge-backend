@@ -39,7 +39,18 @@ const mockPrismaService = {
     update: jest.fn(),
     aggregate: jest.fn(),
   },
+  $transaction: jest.fn(),
+  $executeRaw: jest.fn(),
 };
+
+/**
+ * Default $transaction mock: invokes the callback with a tx object whose
+ * methods delegate back to the top-level mockPrismaService. Individual tests
+ * can override usage values per call by re-mocking `file.aggregate`.
+ */
+const defaultTransactionImpl = async <T>(
+  cb: (tx: typeof mockPrismaService) => Promise<T>,
+): Promise<T> => cb(mockPrismaService);
 
 const mockStorageService: jest.Mocked<StorageService> = {
   upload: jest.fn(),
@@ -176,10 +187,13 @@ describe('FileService', () => {
       });
       mockPrismaService.file.aggregate.mockResolvedValue({ _sum: { size: 0 } });
       mockStorageService.upload.mockResolvedValue(undefined);
+      mockStorageService.delete.mockResolvedValue(undefined);
       mockPrismaService.file.create.mockResolvedValue({
         id: 'file-uuid-123',
         name: 'report.pdf',
       });
+      mockPrismaService.$executeRaw.mockResolvedValue(1);
+      mockPrismaService.$transaction.mockImplementation(defaultTransactionImpl);
       mockedDetectFileType.mockResolvedValue({
         ext: 'pdf',
         mime: 'application/pdf',
@@ -325,7 +339,7 @@ describe('FileService', () => {
       expect(mockStorageService.upload).not.toHaveBeenCalled();
     });
 
-    it('throws PayloadTooLargeException when workspace storage limit would be exceeded', async () => {
+    it('throws PayloadTooLargeException when workspace storage limit would be exceeded (pre-check)', async () => {
       setupHappyPath();
       mockPrismaService.file.aggregate.mockResolvedValue({
         _sum: { size: STORAGE_LIMITS.FREE - 100 },
@@ -338,6 +352,42 @@ describe('FileService', () => {
         }),
       ).rejects.toThrow(PayloadTooLargeException);
       expect(mockStorageService.upload).not.toHaveBeenCalled();
+    });
+
+    it('takes a per-workspace advisory lock inside the transaction', async () => {
+      setupHappyPath();
+
+      await service.upload({ ...baseParams, file: buildMulterFile() });
+
+      expect(mockPrismaService.$executeRaw).toHaveBeenCalledTimes(1);
+      const [strings, ...values] = mockPrismaService.$executeRaw.mock.calls[0];
+      expect((strings as string[]).join('?')).toContain('pg_advisory_xact_lock');
+      expect(values).toContain('ws-1');
+    });
+
+    it('rejects in the locked re-check when a concurrent upload filled the workspace', async () => {
+      setupHappyPath();
+      // Pre-check sees the workspace empty…
+      mockPrismaService.file.aggregate
+        .mockResolvedValueOnce({ _sum: { size: 0 } })
+        // …but inside the locked TX a concurrent upload has filled it.
+        .mockResolvedValueOnce({
+          _sum: { size: STORAGE_LIMITS.FREE - 100 },
+        });
+
+      await expect(
+        service.upload({
+          ...baseParams,
+          file: buildMulterFile({ size: 200 }),
+        }),
+      ).rejects.toThrow(PayloadTooLargeException);
+
+      // R2 upload happened (pre-check passed), and we must clean it up.
+      expect(mockStorageService.upload).toHaveBeenCalledTimes(1);
+      expect(mockStorageService.delete).toHaveBeenCalledWith(
+        'workspaces/ws-1/files/file-uuid-123.pdf',
+      );
+      expect(mockPrismaService.file.create).not.toHaveBeenCalled();
     });
 
     it('uploads the file, stores the object, and creates the DB record', async () => {
