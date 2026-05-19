@@ -14,6 +14,7 @@ import { MessageModule } from './message/message.module';
 import { WhiteboardModule } from './whiteboard/whiteboard.module';
 import { FileModule } from './file/file.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { Injectable } from '@nestjs/common';
 import { LoggerModule } from 'nestjs-pino';
@@ -38,6 +39,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
         limit: 60,
       },
     ]),
+    ScheduleModule.forRoot(),
     LoggerModule.forRoot({
       pinoHttp: {
         transport:
