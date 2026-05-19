@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { FileController } from './file.controller';
 import { FileService } from './file.service';
+import { FileCleanupService } from './file-cleanup.service';
 import { StorageService } from './storage/storage.service';
 import { R2StorageService } from './storage/r2-storage.service';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -20,6 +21,7 @@ import { PrismaModule } from '../prisma/prisma.module';
   controllers: [FileController],
   providers: [
     FileService,
+    FileCleanupService,
     { provide: StorageService, useClass: R2StorageService },
   ],
   exports: [FileService, StorageService],
