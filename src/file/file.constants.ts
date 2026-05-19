@@ -83,6 +83,31 @@ export const ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Text-based formats that `file-type` cannot detect from magic bytes (no signature).
+ * For these, we fall back to: extension allowlist + client MIME + null-byte sanity check.
+ */
+export const TEXT_BASED_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.txt',
+  '.md',
+  '.csv',
+  '.json',
+  '.xml',
+  '.svg',
+  '.rtf',
+]);
+
+export const TEXT_BASED_MIME_TYPES: ReadonlySet<string> = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/xml',
+  'text/xml',
+  'image/svg+xml',
+  'application/rtf',
+]);
+
+/**
  * Allowed file extensions (lowercase, including dot). Belt-and-suspenders alongside MIME check.
  */
 export const ALLOWED_EXTENSIONS: ReadonlySet<string> = new Set([

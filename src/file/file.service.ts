@@ -8,6 +8,7 @@ import {
 import { UserRole } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { extname } from 'path';
+import { fromBuffer as detectFileType } from 'file-type';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
 import {
@@ -15,7 +16,11 @@ import {
   ALLOWED_MIME_TYPES,
   FILE_SIZE_LIMITS,
   STORAGE_LIMITS,
+  TEXT_BASED_EXTENSIONS,
+  TEXT_BASED_MIME_TYPES,
 } from './file.constants';
+
+const NULL_BYTE_SAMPLE_SIZE = 8192;
 
 interface UploadParams {
   workspaceId: string;
@@ -68,9 +73,7 @@ export class FileService {
       throw new BadRequestException(`File extension ${ext} is not allowed`);
     }
 
-    if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
-      throw new BadRequestException(`MIME type ${file.mimetype} is not allowed`);
-    }
+    const verifiedMimeType = await this.verifyMimeType(file, ext);
 
     const fileSizeLimit = FILE_SIZE_LIMITS[owner.plan];
     if (file.size > fileSizeLimit) {
@@ -90,7 +93,7 @@ export class FileService {
     const fileId = randomUUID();
     const storageKey = `workspaces/${workspaceId}/files/${fileId}${ext}`;
 
-    await this.storage.upload(storageKey, file.buffer, file.mimetype);
+    await this.storage.upload(storageKey, file.buffer, verifiedMimeType);
 
     try {
       return await this.prisma.file.create({
@@ -99,7 +102,7 @@ export class FileService {
           workspaceId,
           uploadedById: userId,
           name: file.originalname,
-          mimeType: file.mimetype,
+          mimeType: verifiedMimeType,
           size: file.size,
           storageKey,
         },
@@ -185,6 +188,53 @@ export class FileService {
       throw new ForbiddenException('Not a workspace member');
     }
     return { ownerId: workspace.ownerId };
+  }
+
+  /**
+   * Returns the MIME type to trust for this upload. Detected from the file's magic bytes
+   * when possible — never from the client-supplied `Content-Type`, which can be spoofed.
+   *
+   * For text formats (.txt, .csv, .json, .svg, ...) `file-type` returns nothing because
+   * they have no signature; we accept those only if the extension matches a known text type
+   * AND the buffer has no null bytes in its head (rules out binary content masquerading as text).
+   */
+  private async verifyMimeType(
+    file: Express.Multer.File,
+    ext: string,
+  ): Promise<string> {
+    const detected = await detectFileType(file.buffer);
+
+    if (detected) {
+      if (!ALLOWED_MIME_TYPES.has(detected.mime)) {
+        throw new BadRequestException(
+          `File content type ${detected.mime} is not allowed`,
+        );
+      }
+      return detected.mime;
+    }
+
+    if (!TEXT_BASED_EXTENSIONS.has(ext)) {
+      throw new BadRequestException(
+        'File content does not match any supported type',
+      );
+    }
+    if (!TEXT_BASED_MIME_TYPES.has(file.mimetype)) {
+      throw new BadRequestException(
+        `MIME type ${file.mimetype} is not allowed for ${ext}`,
+      );
+    }
+
+    const sample = file.buffer.subarray(
+      0,
+      Math.min(NULL_BYTE_SAMPLE_SIZE, file.buffer.length),
+    );
+    if (sample.includes(0)) {
+      throw new BadRequestException(
+        'File appears to be binary but claims to be a text format',
+      );
+    }
+
+    return file.mimetype;
   }
 
   private async getWorkspaceUsage(workspaceId: string): Promise<number> {
