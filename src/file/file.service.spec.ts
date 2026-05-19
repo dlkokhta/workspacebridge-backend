@@ -634,4 +634,227 @@ describe('FileService', () => {
       expect(mockPrismaService.file.update).toHaveBeenCalled();
     });
   });
+
+  // ─── listTrash ──────────────────────────────────────────────────────────────
+
+  describe('listTrash', () => {
+    it('returns trashed files when caller is a workspace member', async () => {
+      mockPrismaService.workspace.findUnique.mockResolvedValue(
+        workspaceWithMember('user-1'),
+      );
+      const trashed = [
+        {
+          id: 'f1',
+          name: 'old.pdf',
+          deletedAt: new Date('2026-05-10T00:00:00Z'),
+        },
+      ];
+      mockPrismaService.file.findMany.mockResolvedValue(trashed);
+
+      const result = await service.listTrash('ws-1', 'user-1', UserRole.CLIENT);
+
+      expect(result).toEqual(trashed);
+      expect(mockPrismaService.file.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            workspaceId: 'ws-1',
+            deletedAt: expect.objectContaining({ not: null }),
+          }),
+          orderBy: { deletedAt: 'desc' },
+        }),
+      );
+    });
+
+    it('returns trashed files when caller is the workspace owner', async () => {
+      mockPrismaService.workspace.findUnique.mockResolvedValue(
+        workspaceOwnedBy('owner-1'),
+      );
+      mockPrismaService.file.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.listTrash('ws-1', 'owner-1', UserRole.FREELANCER),
+      ).resolves.toEqual([]);
+    });
+
+    it('throws ForbiddenException when caller is not a workspace member', async () => {
+      mockPrismaService.workspace.findUnique.mockResolvedValue({
+        ownerId: 'someone-else',
+        members: [],
+      });
+
+      await expect(
+        service.listTrash('ws-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.file.findMany).not.toHaveBeenCalled();
+    });
+
+    it('filters by the 30-day retention cutoff (gte: now - 30 days)', async () => {
+      mockPrismaService.workspace.findUnique.mockResolvedValue(
+        workspaceWithMember('user-1'),
+      );
+      mockPrismaService.file.findMany.mockResolvedValue([]);
+
+      const before = Date.now();
+      await service.listTrash('ws-1', 'user-1', UserRole.CLIENT);
+      const after = Date.now();
+
+      const call = mockPrismaService.file.findMany.mock.calls[0][0] as {
+        where: { deletedAt: { gte: Date } };
+      };
+      const cutoffMs = call.where.deletedAt.gte.getTime();
+      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+      // Cutoff should be ~30 days before "now", with a generous tolerance
+      // to account for the time spent inside the call.
+      expect(cutoffMs).toBeGreaterThanOrEqual(before - thirtyDaysMs - 50);
+      expect(cutoffMs).toBeLessThanOrEqual(after - thirtyDaysMs + 50);
+    });
+  });
+
+  // ─── restore ────────────────────────────────────────────────────────────────
+
+  describe('restore', () => {
+    const recentDeletedAt = () => new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const setupHappyPath = () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'user-1',
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+      mockPrismaService.user.findUniqueOrThrow.mockResolvedValue({
+        plan: UserPlan.FREE,
+      });
+      mockPrismaService.file.aggregate.mockResolvedValue({ _sum: { size: 0 } });
+      mockPrismaService.file.update.mockResolvedValue({
+        id: 'file-1',
+        name: 'old.pdf',
+      });
+      mockPrismaService.$executeRaw.mockResolvedValue(1);
+      mockPrismaService.$transaction.mockImplementation(defaultTransactionImpl);
+    };
+
+    it('throws NotFoundException when the file does not exist', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.restore('missing', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the file is not deleted (deletedAt is null)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'user-1',
+        deletedAt: null,
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.restore('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the file is past the 30-day window', async () => {
+      const expired = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'user-1',
+        deletedAt: expired,
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.restore('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when caller is neither uploader nor workspace owner', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'someone-else',
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.restore('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('throws PayloadTooLargeException when restoring would exceed the workspace storage limit', async () => {
+      setupHappyPath();
+      mockPrismaService.file.aggregate.mockResolvedValue({
+        _sum: { size: STORAGE_LIMITS.FREE - 100 },
+      });
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'user-1',
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.restore('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(PayloadTooLargeException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('restores the file when caller is the uploader', async () => {
+      setupHappyPath();
+
+      await service.restore('file-1', 'user-1', UserRole.CLIENT);
+
+      expect(mockPrismaService.file.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'file-1' },
+          data: { deletedAt: null },
+        }),
+      );
+    });
+
+    it('restores the file when caller is the workspace owner', async () => {
+      setupHappyPath();
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: 'someone-else',
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await service.restore('file-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(mockPrismaService.file.update).toHaveBeenCalled();
+    });
+
+    it('takes a per-workspace advisory lock inside the transaction', async () => {
+      setupHappyPath();
+
+      await service.restore('file-1', 'user-1', UserRole.CLIENT);
+
+      expect(mockPrismaService.$executeRaw).toHaveBeenCalledTimes(1);
+      const [strings, ...values] =
+        mockPrismaService.$executeRaw.mock.calls[0];
+      expect((strings as string[]).join('?')).toContain(
+        'pg_advisory_xact_lock',
+      );
+      expect(values).toContain('ws-1');
+    });
+  });
 });
