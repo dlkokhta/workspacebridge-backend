@@ -238,6 +238,14 @@ npm run test:e2e   # end-to-end
 | POST | `/files/:id/restore` | Restore a soft-deleted file (quota re-checked) |
 | DELETE | `/files/:id/purge` | Permanently delete a trashed file from R2 + DB (uploader or workspace owner) |
 
+### Shared Links (`/links`, `/workspace/:workspaceId/links`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workspace/:workspaceId/links` | List shared links in a workspace (any member) |
+| POST | `/workspace/:workspaceId/links` | Add a link (`{ url, title? }`, any member) |
+| DELETE | `/links/:id` | Delete a link (creator OR workspace owner) |
+
 ### Whiteboards — requires JWT
 
 | Method | Endpoint | Description |
@@ -306,6 +314,7 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `WorkspaceInvite` | Invite tokens (email or shareable link, single-use) |
 | `Message` | Workspace chat messages |
 | `File` | Workspace file (R2 storage key + metadata, soft-delete via `deletedAt`) |
+| `SharedLink` | URL shared in a workspace (creator attribution, optional title) |
 | `Whiteboard` | Excalidraw board with scene JSON |
 | `WhiteboardComment` | Comment pinned to an Excalidraw element |
 | `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
@@ -363,6 +372,7 @@ src/
 ├── invite/        # Invite generation, email sending, accept flow
 ├── message/       # Workspace chat (REST history + Socket.IO gateway)
 ├── file/          # Uploads, downloads, trash + restore + purge, R2 storage, daily cleanup cron
+├── shared-link/   # Workspace URL bookmarks (any-member add, creator-or-owner delete)
 ├── whiteboard/    # Boards, realtime sync, comments, version snapshots
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
