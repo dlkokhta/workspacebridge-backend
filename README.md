@@ -226,6 +226,18 @@ npm run test:e2e   # end-to-end
 |--------|----------|-------------|
 | GET | `/workspace/:workspaceId/messages` | List messages (paginated, newest first) |
 
+### Files (`/files`, `/workspace/:workspaceId/files`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workspace/:workspaceId/files` | List active files in a workspace |
+| POST | `/workspace/:workspaceId/files` | Upload a file (multipart `file`, server-side MIME + size + quota checks) |
+| GET | `/workspace/:workspaceId/files/trash` | List soft-deleted files within the 30-day retention window |
+| GET | `/files/:id/download` | Get a short-lived presigned R2 download URL (`{ url, expiresIn, name }`) |
+| DELETE | `/files/:id` | Soft-delete (moves to trash, keeps bytes for 30 days) |
+| POST | `/files/:id/restore` | Restore a soft-deleted file (quota re-checked) |
+| DELETE | `/files/:id/purge` | Permanently delete a trashed file from R2 + DB (uploader or workspace owner) |
+
 ### Whiteboards — requires JWT
 
 | Method | Endpoint | Description |
@@ -293,6 +305,7 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `WorkspaceMember` | Links clients to workspaces |
 | `WorkspaceInvite` | Invite tokens (email or shareable link, single-use) |
 | `Message` | Workspace chat messages |
+| `File` | Workspace file (R2 storage key + metadata, soft-delete via `deletedAt`) |
 | `Whiteboard` | Excalidraw board with scene JSON |
 | `WhiteboardComment` | Comment pinned to an Excalidraw element |
 | `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
@@ -349,6 +362,7 @@ src/
 ├── workspace/     # Workspace CRUD
 ├── invite/        # Invite generation, email sending, accept flow
 ├── message/       # Workspace chat (REST history + Socket.IO gateway)
+├── file/          # Uploads, downloads, trash + restore + purge, R2 storage, daily cleanup cron
 ├── whiteboard/    # Boards, realtime sync, comments, version snapshots
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
