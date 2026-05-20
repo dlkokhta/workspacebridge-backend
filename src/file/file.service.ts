@@ -103,8 +103,17 @@ export class FileService {
         // total. Different workspaces don't block each other.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
 
+        // Re-check inside the lock so concurrent uploads can't both pass the
+        // pre-check and race past the cap. Must mirror getWorkspaceUsage: also
+        // count soft-deleted bytes still inside the trash retention window.
+        const trashCutoff = new Date(
+          Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+        );
         const { _sum } = await tx.file.aggregate({
-          where: { workspaceId, deletedAt: null },
+          where: {
+            workspaceId,
+            OR: [{ deletedAt: null }, { deletedAt: { gte: trashCutoff } }],
+          },
           _sum: { size: true },
         });
         const currentUsage = _sum.size ?? 0;

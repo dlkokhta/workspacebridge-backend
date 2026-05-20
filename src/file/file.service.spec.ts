@@ -373,6 +373,26 @@ describe('FileService', () => {
       );
     });
 
+    it('locked re-check counts soft-deleted bytes within retention towards the quota', async () => {
+      setupHappyPath();
+
+      await service.upload({ ...baseParams, file: buildMulterFile() });
+
+      // The 2nd aggregate call is the in-transaction re-check.
+      const inTxCall = mockPrismaService.file.aggregate.mock.calls[1][0];
+      expect(inTxCall.where).toEqual(
+        expect.objectContaining({
+          workspaceId: 'ws-1',
+          OR: expect.arrayContaining([
+            { deletedAt: null },
+            expect.objectContaining({
+              deletedAt: expect.objectContaining({ gte: expect.any(Date) }),
+            }),
+          ]),
+        }),
+      );
+    });
+
     it('takes a per-workspace advisory lock inside the transaction', async () => {
       setupHappyPath();
 
