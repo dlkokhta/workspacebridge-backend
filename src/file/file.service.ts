@@ -70,12 +70,11 @@ export class FileService {
       select: { plan: true },
     });
 
-    const ext = extname(file.originalname).toLowerCase();
+    const safeName = this.sanitizeFilename(file.originalname);
+    const ext = extname(safeName).toLowerCase();
     if (!ALLOWED_EXTENSIONS.has(ext)) {
       throw new BadRequestException(`File extension ${ext} is not allowed`);
     }
-
-    const safeName = this.sanitizeFilename(file.originalname, ext);
 
     const verifiedMimeType = await this.verifyMimeType(file, ext);
 
@@ -373,7 +372,7 @@ export class FileService {
    * null bytes that confuse downstream tools, or absurd lengths that break
    * the UI. The extension is preserved so display + downloads stay coherent.
    */
-  private sanitizeFilename(originalName: string, ext: string): string {
+  private sanitizeFilename(originalName: string): string {
     // eslint-disable-next-line no-control-regex
     const stripped = originalName.replace(/[\x00-\x1F\x7F]/g, '');
     const trimmed = stripped.trim().replace(/[. ]+$/, '');
@@ -383,6 +382,7 @@ export class FileService {
     if (trimmed.length <= MAX_FILENAME_LENGTH) {
       return trimmed;
     }
+    const ext = extname(trimmed);
     const base = trimmed.slice(0, trimmed.length - ext.length);
     const truncatedBase = base.slice(0, MAX_FILENAME_LENGTH - ext.length);
     return truncatedBase + ext;

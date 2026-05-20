@@ -15,7 +15,11 @@ import { UserPlan, UserRole } from '@prisma/client';
 import { FileService } from './file.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
-import { FILE_SIZE_LIMITS, STORAGE_LIMITS } from './file.constants';
+import {
+  FILE_SIZE_LIMITS,
+  MAX_FILENAME_LENGTH,
+  STORAGE_LIMITS,
+} from './file.constants';
 import { fromBuffer as detectFileType } from 'file-type';
 
 jest.mock('crypto', () => ({
@@ -491,6 +495,54 @@ describe('FileService', () => {
         where: { id: 'owner-1' },
         select: { plan: true },
       });
+    });
+
+    it('strips control characters from the filename before persisting', async () => {
+      setupHappyPath();
+
+      await service.upload({
+        ...baseParams,
+        file: buildMulterFile({
+          originalname: 'report\nFAKE LOG\r\t.pdf',
+        }),
+      });
+
+      expect(mockPrismaService.file.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'reportFAKE LOG.pdf' }),
+        }),
+      );
+    });
+
+    it('truncates over-long filenames while preserving the extension', async () => {
+      setupHappyPath();
+
+      const longBase = 'a'.repeat(MAX_FILENAME_LENGTH + 50);
+      await service.upload({
+        ...baseParams,
+        file: buildMulterFile({ originalname: `${longBase}.pdf` }),
+      });
+
+      const created = mockPrismaService.file.create.mock.calls[0][0] as {
+        data: { name: string };
+      };
+      expect(created.data.name.length).toBe(MAX_FILENAME_LENGTH);
+      expect(created.data.name.endsWith('.pdf')).toBe(true);
+    });
+
+    it('trims trailing whitespace and dots (Windows-style quirks)', async () => {
+      setupHappyPath();
+
+      await service.upload({
+        ...baseParams,
+        file: buildMulterFile({ originalname: 'report.pdf.   ' }),
+      });
+
+      expect(mockPrismaService.file.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'report.pdf' }),
+        }),
+      );
     });
 
     it('rolls back storage when DB create fails', async () => {
