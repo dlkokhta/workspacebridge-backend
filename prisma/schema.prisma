@@ -40,6 +40,7 @@ model User {
   whiteboardComments   WhiteboardComment[] @relation("WhiteboardComments")
   whiteboardVersions   WhiteboardVersion[] @relation("WhiteboardVersions")
   uploadedFiles        File[]              @relation("UploadedFiles")
+  addedSharedLinks     SharedLink[]        @relation("AddedSharedLinks")
 
   @@map("users")
 }
@@ -111,6 +112,7 @@ model Workspace {
   messages    Message[]
   whiteboards Whiteboard[]
   files       File[]
+  sharedLinks SharedLink[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -224,6 +226,28 @@ model File {
   @@index([workspaceId, deletedAt, createdAt])
   @@index([deletedAt])
   @@map("files")
+}
+
+model SharedLink {
+  id String @id @default(uuid())
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Same rule as files: links belong to the workspace, not the adder.
+  // When a user is deleted the attribution is cleared (UI shows
+  // "Added by deleted user"); the link itself stays so the freelancer
+  // does not lose context shared by a client who later leaves.
+  addedById String? @map("added_by_id")
+  addedBy   User?   @relation("AddedSharedLinks", fields: [addedById], references: [id], onDelete: SetNull)
+
+  url   String
+  title String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([workspaceId, createdAt])
+  @@map("shared_links")
 }
 
 model WorkspaceInvite {
