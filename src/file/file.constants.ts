@@ -7,6 +7,13 @@ import { UserPlan } from '@prisma/client';
 export const TRASH_RETENTION_DAYS = 30;
 
 /**
+ * Max characters allowed in a stored filename. Matches most real
+ * filesystem limits (ext4, NTFS, APFS all cap at 255 bytes/chars per
+ * path component) and keeps the UI grid from breaking on absurd names.
+ */
+export const MAX_FILENAME_LENGTH = 255;
+
+/**
  * Maximum single file size (bytes) by user plan.
  * Mirrors the table in README.md → File Storage Plans.
  */

@@ -15,6 +15,7 @@ import {
   ALLOWED_EXTENSIONS,
   ALLOWED_MIME_TYPES,
   FILE_SIZE_LIMITS,
+  MAX_FILENAME_LENGTH,
   STORAGE_LIMITS,
   TEXT_BASED_EXTENSIONS,
   TEXT_BASED_MIME_TYPES,
@@ -74,6 +75,8 @@ export class FileService {
       throw new BadRequestException(`File extension ${ext} is not allowed`);
     }
 
+    const safeName = this.sanitizeFilename(file.originalname, ext);
+
     const verifiedMimeType = await this.verifyMimeType(file, ext);
 
     const fileSizeLimit = FILE_SIZE_LIMITS[owner.plan];
@@ -128,7 +131,7 @@ export class FileService {
             id: fileId,
             workspaceId,
             uploadedById: userId,
-            name: file.originalname,
+            name: safeName,
             mimeType: verifiedMimeType,
             size: file.size,
             storageKey,
@@ -362,6 +365,27 @@ export class FileService {
       throw new ForbiddenException('Not a workspace member');
     }
     return { ownerId: workspace.ownerId };
+  }
+
+  /**
+   * Cleans the client-supplied filename before persisting it. We never trust
+   * the raw value: it can carry control characters (log injection via `\n`),
+   * null bytes that confuse downstream tools, or absurd lengths that break
+   * the UI. The extension is preserved so display + downloads stay coherent.
+   */
+  private sanitizeFilename(originalName: string, ext: string): string {
+    // eslint-disable-next-line no-control-regex
+    const stripped = originalName.replace(/[\x00-\x1F\x7F]/g, '');
+    const trimmed = stripped.trim().replace(/[. ]+$/, '');
+    if (!trimmed) {
+      throw new BadRequestException('Filename is required');
+    }
+    if (trimmed.length <= MAX_FILENAME_LENGTH) {
+      return trimmed;
+    }
+    const base = trimmed.slice(0, trimmed.length - ext.length);
+    const truncatedBase = base.slice(0, MAX_FILENAME_LENGTH - ext.length);
+    return truncatedBase + ext;
   }
 
   /**
