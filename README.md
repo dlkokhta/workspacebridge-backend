@@ -323,6 +323,22 @@ const STORAGE_LIMITS = {
 | Pro | 100 MB | 10 GB |
 | Business | 500 MB | 50 GB |
 
+### Trash and quota
+
+Deleting a file via `DELETE /files/:id` is a **soft delete** — the file moves
+to trash and its bytes keep occupying R2 storage for a 30-day retention
+window. Trashed bytes count against the workspace quota during that window,
+so the upload and restore checks see the workspace's real R2 footprint
+rather than just active files.
+
+Two paths free those bytes:
+
+- **Auto:** the daily cleanup cron (`FileCleanupService`, 03:00) purges
+  files whose `deletedAt` is older than 30 days from R2 and the DB.
+- **Manual:** `DELETE /files/:id/purge` lets the uploader or workspace
+  owner permanently delete a trashed file immediately, recovering the
+  bytes without waiting for the sweep.
+
 ## Project Structure
 
 ```

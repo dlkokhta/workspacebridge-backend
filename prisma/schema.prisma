@@ -204,8 +204,12 @@ model File {
   workspaceId String    @map("workspace_id")
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  uploadedById String @map("uploaded_by_id")
-  uploadedBy   User   @relation("UploadedFiles", fields: [uploadedById], references: [id], onDelete: Cascade)
+  // Files belong to the workspace, not to the uploader. When a user is
+  // deleted the uploader label is cleared (UI shows "Deleted user"); the
+  // file itself stays so the workspace owner does not lose work uploaded
+  // by a client who later closes their account.
+  uploadedById String? @map("uploaded_by_id")
+  uploadedBy   User?   @relation("UploadedFiles", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   name       String
   mimeType   String @map("mime_type")
