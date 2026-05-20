@@ -353,9 +353,21 @@ export class FileService {
     return file.mimetype;
   }
 
+  /**
+   * Workspace storage usage in bytes. Includes both active files and
+   * soft-deleted files still within the trash retention window — those
+   * bytes are physically present in R2 until the cleanup cron purges them,
+   * so they must count against the owner's quota.
+   */
   private async getWorkspaceUsage(workspaceId: string): Promise<number> {
+    const cutoff = new Date(
+      Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
     const result = await this.prisma.file.aggregate({
-      where: { workspaceId, deletedAt: null },
+      where: {
+        workspaceId,
+        OR: [{ deletedAt: null }, { deletedAt: { gte: cutoff } }],
+      },
       _sum: { size: true },
     });
     return result._sum.size ?? 0;

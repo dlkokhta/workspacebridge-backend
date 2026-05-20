@@ -354,6 +354,25 @@ describe('FileService', () => {
       expect(mockStorageService.upload).not.toHaveBeenCalled();
     });
 
+    it('pre-check counts soft-deleted bytes within retention towards the quota', async () => {
+      setupHappyPath();
+
+      await service.upload({ ...baseParams, file: buildMulterFile() });
+
+      const preCheckCall = mockPrismaService.file.aggregate.mock.calls[0][0];
+      expect(preCheckCall.where).toEqual(
+        expect.objectContaining({
+          workspaceId: 'ws-1',
+          OR: expect.arrayContaining([
+            { deletedAt: null },
+            expect.objectContaining({
+              deletedAt: expect.objectContaining({ gte: expect.any(Date) }),
+            }),
+          ]),
+        }),
+      );
+    });
+
     it('takes a per-workspace advisory lock inside the transaction', async () => {
       setupHappyPath();
 
