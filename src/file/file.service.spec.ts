@@ -835,8 +835,12 @@ describe('FileService', () => {
 
     it('throws PayloadTooLargeException when restoring would exceed the workspace storage limit', async () => {
       setupHappyPath();
+      // The file being restored is soft-deleted within retention, so it is
+      // already in the sum returned by aggregate. A workspace whose total
+      // (active + retained trash) exceeds the plan limit — e.g. after a plan
+      // downgrade — should refuse the restore.
       mockPrismaService.file.aggregate.mockResolvedValue({
-        _sum: { size: STORAGE_LIMITS.FREE - 100 },
+        _sum: { size: STORAGE_LIMITS.FREE + 1 },
       });
       mockPrismaService.file.findUnique.mockResolvedValue({
         id: 'file-1',
@@ -851,6 +855,25 @@ describe('FileService', () => {
         service.restore('file-1', 'user-1', UserRole.CLIENT),
       ).rejects.toThrow(PayloadTooLargeException);
       expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
+
+    it('counts soft-deleted bytes within retention towards the restore quota check', async () => {
+      setupHappyPath();
+
+      await service.restore('file-1', 'user-1', UserRole.CLIENT);
+
+      const aggregateCall = mockPrismaService.file.aggregate.mock.calls[0][0];
+      expect(aggregateCall.where).toEqual(
+        expect.objectContaining({
+          workspaceId: 'ws-1',
+          OR: expect.arrayContaining([
+            { deletedAt: null },
+            expect.objectContaining({
+              deletedAt: expect.objectContaining({ gte: expect.any(Date) }),
+            }),
+          ]),
+        }),
+      );
     });
 
     it('restores the file when caller is the uploader', async () => {

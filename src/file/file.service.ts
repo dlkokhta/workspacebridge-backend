@@ -234,12 +234,23 @@ export class FileService {
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${file.workspaceId}))`;
 
+      // Count both active and soft-deleted-within-retention bytes — those are
+      // physically present in R2 and count against the owner's quota. This
+      // also means the file being restored (still soft-deleted at this point)
+      // is already in the sum, so the check enforces that the workspace
+      // could hold the file even if it stayed in trash forever.
+      const trashCutoff = new Date(
+        Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+      );
       const { _sum } = await tx.file.aggregate({
-        where: { workspaceId: file.workspaceId, deletedAt: null },
+        where: {
+          workspaceId: file.workspaceId,
+          OR: [{ deletedAt: null }, { deletedAt: { gte: trashCutoff } }],
+        },
         _sum: { size: true },
       });
       const currentUsage = _sum.size ?? 0;
-      if (currentUsage + file.size > storageLimit) {
+      if (currentUsage > storageLimit) {
         throw new PayloadTooLargeException(
           `Restoring this file would exceed the workspace storage limit of ${this.formatBytes(storageLimit)}`,
         );
