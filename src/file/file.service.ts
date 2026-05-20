@@ -274,6 +274,44 @@ export class FileService {
     });
   }
 
+  /**
+   * Permanently delete a soft-deleted file from trash. Frees R2 bytes
+   * immediately so the user does not have to wait for the daily cleanup
+   * sweep ({@link FileCleanupService}). Only the original uploader or the
+   * workspace owner may purge.
+   *
+   * Order matches the cleanup cron: R2 first, then DB row. If R2 throws,
+   * the DB row stays and the next sweep (or a retry) will pick it up.
+   */
+  async purge(fileId: string, userId: string, _userRole: UserRole) {
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: {
+        id: true,
+        uploadedById: true,
+        deletedAt: true,
+        storageKey: true,
+        workspace: { select: { ownerId: true } },
+      },
+    });
+    if (!file || !file.deletedAt) {
+      throw new NotFoundException('File not found');
+    }
+
+    const isUploader = file.uploadedById === userId;
+    const isWorkspaceOwner = file.workspace.ownerId === userId;
+    if (!isUploader && !isWorkspaceOwner) {
+      throw new ForbiddenException(
+        'Only the uploader or workspace owner can permanently delete this file',
+      );
+    }
+
+    await this.storage.delete(file.storageKey);
+    await this.prisma.file.delete({ where: { id: fileId } });
+
+    return { id: fileId, purged: true };
+  }
+
   async remove(fileId: string, userId: string, _userRole: UserRole) {
     const file = await this.prisma.file.findUnique({
       where: { id: fileId },

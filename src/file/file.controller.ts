@@ -93,4 +93,15 @@ export class FileController {
     const user = req.user as RequestUser;
     return this.fileService.remove(id, user.id, user.role);
   }
+
+  @Delete('files/:id/purge')
+  @ApiOperation({
+    summary:
+      'Permanently delete a trashed file (frees workspace storage immediately)',
+  })
+  @ApiResponse({ status: 200, description: 'File purged from trash and R2' })
+  purge(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as RequestUser;
+    return this.fileService.purge(id, user.id, user.role);
+  }
 }
