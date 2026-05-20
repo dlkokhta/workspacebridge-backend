@@ -673,6 +673,39 @@ describe('FileService', () => {
 
       expect(mockPrismaService.file.update).toHaveBeenCalled();
     });
+
+    it('still lets the workspace owner soft-delete when the original uploader was deleted (uploadedById null)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        uploadedById: null,
+        deletedAt: null,
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+      mockPrismaService.file.update.mockResolvedValue({
+        id: 'file-1',
+        deletedAt: new Date(),
+      });
+
+      await service.remove('file-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(mockPrismaService.file.update).toHaveBeenCalled();
+    });
+
+    it('forbids a non-owner from soft-deleting an orphaned file (uploadedById null must not match caller)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        uploadedById: null,
+        deletedAt: null,
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.remove('file-1', 'other-client', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
   });
 
   // ─── listTrash ──────────────────────────────────────────────────────────────
@@ -726,6 +759,31 @@ describe('FileService', () => {
         service.listTrash('ws-1', 'user-1', UserRole.CLIENT),
       ).rejects.toThrow(ForbiddenException);
       expect(mockPrismaService.file.findMany).not.toHaveBeenCalled();
+    });
+
+    it('returns orphaned trashed files with uploadedBy: null intact (no filtering on null uploader)', async () => {
+      mockPrismaService.workspace.findUnique.mockResolvedValue(
+        workspaceOwnedBy('owner-1'),
+      );
+      const trashed = [
+        {
+          id: 'f1',
+          name: 'mine.pdf',
+          deletedAt: new Date('2026-05-10T00:00:00Z'),
+          uploadedBy: { id: 'owner-1', firstname: 'Me', lastname: '', email: '' },
+        },
+        {
+          id: 'f2',
+          name: 'orphan.pdf',
+          deletedAt: new Date('2026-05-11T00:00:00Z'),
+          uploadedBy: null,
+        },
+      ];
+      mockPrismaService.file.findMany.mockResolvedValue(trashed);
+
+      const result = await service.listTrash('ws-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(result).toEqual(trashed);
     });
 
     it('filters by the 30-day retention cutoff (gte: now - 30 days)', async () => {
@@ -919,6 +977,38 @@ describe('FileService', () => {
       );
       expect(values).toContain('ws-1');
     });
+
+    it('lets the workspace owner restore an orphaned file (uploadedById null)', async () => {
+      setupHappyPath();
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: null,
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await service.restore('file-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(mockPrismaService.file.update).toHaveBeenCalled();
+    });
+
+    it('forbids a non-owner from restoring an orphaned file (uploadedById null must not match caller)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        id: 'file-1',
+        size: 500,
+        uploadedById: null,
+        deletedAt: recentDeletedAt(),
+        workspaceId: 'ws-1',
+        workspace: { ownerId: 'owner-1' },
+      });
+
+      await expect(
+        service.restore('file-1', 'other-client', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.file.update).not.toHaveBeenCalled();
+    });
   });
 
   // ─── purge ──────────────────────────────────────────────────────────────────
@@ -1028,6 +1118,33 @@ describe('FileService', () => {
 
       expect(mockStorageService.delete).toHaveBeenCalled();
       expect(mockPrismaService.file.delete).toHaveBeenCalled();
+    });
+
+    it('lets the workspace owner purge an orphaned file (uploadedById null)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        ...trashedFile(),
+        uploadedById: null,
+      });
+      mockStorageService.delete.mockResolvedValue(undefined);
+      mockPrismaService.file.delete.mockResolvedValue({ id: 'file-1' });
+
+      await service.purge('file-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(mockStorageService.delete).toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).toHaveBeenCalled();
+    });
+
+    it('forbids a non-owner from purging an orphaned file (uploadedById null must not match caller)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue({
+        ...trashedFile(),
+        uploadedById: null,
+      });
+
+      await expect(
+        service.purge('file-1', 'other-client', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockStorageService.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).not.toHaveBeenCalled();
     });
   });
 });
