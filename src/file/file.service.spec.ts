@@ -37,6 +37,7 @@ const mockPrismaService = {
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
     aggregate: jest.fn(),
   },
   $transaction: jest.fn(),
@@ -917,6 +918,116 @@ describe('FileService', () => {
         'pg_advisory_xact_lock',
       );
       expect(values).toContain('ws-1');
+    });
+  });
+
+  // ─── purge ──────────────────────────────────────────────────────────────────
+
+  describe('purge', () => {
+    const trashedFile = (
+      overrides: Partial<{
+        uploadedById: string;
+        ownerId: string;
+        deletedAt: Date | null;
+      }> = {},
+    ) => ({
+      id: 'file-1',
+      uploadedById: overrides.uploadedById ?? 'user-1',
+      // Explicit `in` check so callers can pass `deletedAt: null` to simulate
+      // an active file — `??` would treat null as nullish and silently
+      // substitute the default Date.
+      deletedAt: 'deletedAt' in overrides ? overrides.deletedAt : new Date(),
+      storageKey: 'workspaces/ws-1/files/file-1.pdf',
+      workspace: { ownerId: overrides.ownerId ?? 'owner-1' },
+    });
+
+    it('throws NotFoundException when the file does not exist', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.purge('missing', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockStorageService.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the file is not soft-deleted (still active)', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(
+        trashedFile({ deletedAt: null }),
+      );
+
+      await expect(
+        service.purge('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockStorageService.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when caller is neither uploader nor workspace owner', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(
+        trashedFile({ uploadedById: 'someone-else' }),
+      );
+
+      await expect(
+        service.purge('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockStorageService.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).not.toHaveBeenCalled();
+    });
+
+    it('deletes from R2 and DB when caller is the uploader', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(trashedFile());
+      mockStorageService.delete.mockResolvedValue(undefined);
+      mockPrismaService.file.delete.mockResolvedValue({ id: 'file-1' });
+
+      const result = await service.purge('file-1', 'user-1', UserRole.CLIENT);
+
+      expect(mockStorageService.delete).toHaveBeenCalledWith(
+        'workspaces/ws-1/files/file-1.pdf',
+      );
+      expect(mockPrismaService.file.delete).toHaveBeenCalledWith({
+        where: { id: 'file-1' },
+      });
+      expect(result).toEqual({ id: 'file-1', purged: true });
+    });
+
+    it('deletes from R2 and DB when caller is the workspace owner', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(
+        trashedFile({ uploadedById: 'someone-else' }),
+      );
+      mockStorageService.delete.mockResolvedValue(undefined);
+      mockPrismaService.file.delete.mockResolvedValue({ id: 'file-1' });
+
+      await service.purge('file-1', 'owner-1', UserRole.FREELANCER);
+
+      expect(mockStorageService.delete).toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).toHaveBeenCalled();
+    });
+
+    it('leaves the DB row in place when R2 delete fails', async () => {
+      mockPrismaService.file.findUnique.mockResolvedValue(trashedFile());
+      const r2Error = new Error('R2 unavailable');
+      mockStorageService.delete.mockRejectedValue(r2Error);
+
+      await expect(
+        service.purge('file-1', 'user-1', UserRole.CLIENT),
+      ).rejects.toBe(r2Error);
+      expect(mockPrismaService.file.delete).not.toHaveBeenCalled();
+    });
+
+    it('also works on files past the 30-day retention window', async () => {
+      // The cron may be late; the user should still be able to purge.
+      const expired = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+      mockPrismaService.file.findUnique.mockResolvedValue(
+        trashedFile({ deletedAt: expired }),
+      );
+      mockStorageService.delete.mockResolvedValue(undefined);
+      mockPrismaService.file.delete.mockResolvedValue({ id: 'file-1' });
+
+      await service.purge('file-1', 'user-1', UserRole.CLIENT);
+
+      expect(mockStorageService.delete).toHaveBeenCalled();
+      expect(mockPrismaService.file.delete).toHaveBeenCalled();
     });
   });
 });
