@@ -14,6 +14,7 @@ import { MessageModule } from './message/message.module';
 import { WhiteboardModule } from './whiteboard/whiteboard.module';
 import { FileModule } from './file/file.module';
 import { SharedLinkModule } from './shared-link/shared-link.module';
+import { TaskModule } from './task/task.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
@@ -62,6 +63,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     WhiteboardModule,
     FileModule,
     SharedLinkModule,
+    TaskModule,
   ],
   controllers: [AppController],
   providers: [
