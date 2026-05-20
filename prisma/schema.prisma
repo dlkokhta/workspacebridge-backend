@@ -41,6 +41,7 @@ model User {
   whiteboardVersions   WhiteboardVersion[] @relation("WhiteboardVersions")
   uploadedFiles        File[]              @relation("UploadedFiles")
   addedSharedLinks     SharedLink[]        @relation("AddedSharedLinks")
+  createdTasks         Task[]              @relation("CreatedTasks")
 
   @@map("users")
 }
@@ -113,6 +114,7 @@ model Workspace {
   whiteboards Whiteboard[]
   files       File[]
   sharedLinks SharedLink[]
+  tasks       Task[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -250,6 +252,29 @@ model SharedLink {
   @@map("shared_links")
 }
 
+model Task {
+  id String @id @default(uuid())
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // Same rule as files / shared links: tasks belong to the workspace, not
+  // the creator. When a user is deleted the attribution is cleared (UI
+  // shows "Created by deleted user"); the task itself stays so the
+  // freelancer does not lose a todo list a client helped build.
+  createdById String? @map("created_by_id")
+  createdBy   User?   @relation("CreatedTasks", fields: [createdById], references: [id], onDelete: SetNull)
+
+  title  String
+  status TaskStatus @default(TODO)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([workspaceId, createdAt])
+  @@map("tasks")
+}
+
 model WorkspaceInvite {
   id    String  @id @default(uuid())
   token String  @unique @default(uuid())
@@ -320,4 +345,9 @@ enum TokenType {
 enum WhiteboardVersionType {
   MANUAL
   AUTO
+}
+
+enum TaskStatus {
+  TODO
+  DONE
 }
