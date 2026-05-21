@@ -4,10 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateTaskDto } from './dto/create-task.dto';
-import { UpdateTaskDto } from './dto/update-task.dto';
+import { CreateSharedTaskDto } from './dto/create-shared-task.dto';
+import { UpdateSharedTaskDto } from './dto/update-shared-task.dto';
 
-const TASK_SELECT = {
+const SHARED_TASK_SELECT = {
   id: true,
   title: true,
   status: true,
@@ -19,54 +19,54 @@ const TASK_SELECT = {
 } as const;
 
 @Injectable()
-export class TaskService {
+export class SharedTaskService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(workspaceId: string, userId: string) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
 
-    return this.prisma.task.findMany({
+    return this.prisma.sharedTask.findMany({
       where: { workspaceId },
       orderBy: { createdAt: 'desc' },
-      select: TASK_SELECT,
+      select: SHARED_TASK_SELECT,
     });
   }
 
-  async create(workspaceId: string, userId: string, dto: CreateTaskDto) {
+  async create(workspaceId: string, userId: string, dto: CreateSharedTaskDto) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
 
-    return this.prisma.task.create({
+    return this.prisma.sharedTask.create({
       data: {
         workspaceId,
         createdById: userId,
         title: dto.title,
       },
-      select: TASK_SELECT,
+      select: SHARED_TASK_SELECT,
     });
   }
 
-  async update(taskId: string, userId: string, dto: UpdateTaskDto) {
-    const task = await this.prisma.task.findUnique({
+  async update(taskId: string, userId: string, dto: UpdateSharedTaskDto) {
+    const task = await this.prisma.sharedTask.findUnique({
       where: { id: taskId },
       select: { id: true, workspaceId: true },
     });
     if (!task) {
-      throw new NotFoundException('Task not found');
+      throw new NotFoundException('Shared task not found');
     }
     await this.ensureWorkspaceAccess(task.workspaceId, userId);
 
-    return this.prisma.task.update({
+    return this.prisma.sharedTask.update({
       where: { id: taskId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
         ...(dto.status !== undefined && { status: dto.status }),
       },
-      select: TASK_SELECT,
+      select: SHARED_TASK_SELECT,
     });
   }
 
   async remove(taskId: string, userId: string) {
-    const task = await this.prisma.task.findUnique({
+    const task = await this.prisma.sharedTask.findUnique({
       where: { id: taskId },
       select: {
         id: true,
@@ -75,7 +75,7 @@ export class TaskService {
       },
     });
     if (!task) {
-      throw new NotFoundException('Task not found');
+      throw new NotFoundException('Shared task not found');
     }
 
     const isCreator = task.createdById === userId;
@@ -86,7 +86,7 @@ export class TaskService {
       );
     }
 
-    await this.prisma.task.delete({ where: { id: taskId } });
+    await this.prisma.sharedTask.delete({ where: { id: taskId } });
     return { id: taskId, deleted: true };
   }
 

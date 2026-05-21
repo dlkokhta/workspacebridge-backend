@@ -2,7 +2,7 @@ import { IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-valida
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { TaskStatus } from '@prisma/client';
 
-export class UpdateTaskDto {
+export class UpdateSharedTaskDto {
   @ApiPropertyOptional({ example: 'Send updated logo mockups' })
   @IsOptional()
   @IsString()

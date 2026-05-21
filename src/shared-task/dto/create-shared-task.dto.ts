@@ -1,7 +1,7 @@
 import { IsString, MaxLength, MinLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-export class CreateTaskDto {
+export class CreateSharedTaskDto {
   @ApiProperty({ example: 'Send updated logo mockups' })
   @IsString()
   @MinLength(1)

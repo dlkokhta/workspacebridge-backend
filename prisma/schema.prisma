@@ -41,7 +41,7 @@ model User {
   whiteboardVersions   WhiteboardVersion[] @relation("WhiteboardVersions")
   uploadedFiles        File[]              @relation("UploadedFiles")
   addedSharedLinks     SharedLink[]        @relation("AddedSharedLinks")
-  createdTasks         Task[]              @relation("CreatedTasks")
+  createdTasks         SharedTask[]        @relation("CreatedTasks")
 
   @@map("users")
 }
@@ -114,7 +114,7 @@ model Workspace {
   whiteboards Whiteboard[]
   files       File[]
   sharedLinks SharedLink[]
-  tasks       Task[]
+  sharedTasks SharedTask[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -252,7 +252,7 @@ model SharedLink {
   @@map("shared_links")
 }
 
-model Task {
+model SharedTask {
   id String @id @default(uuid())
 
   workspaceId String    @map("workspace_id")
@@ -272,7 +272,7 @@ model Task {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([workspaceId, createdAt])
-  @@map("tasks")
+  @@map("shared_tasks")
 }
 
 model WorkspaceInvite {

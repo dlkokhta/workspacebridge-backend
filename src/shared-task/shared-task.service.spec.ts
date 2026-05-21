@@ -7,14 +7,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { TaskStatus } from '@prisma/client';
-import { TaskService } from './task.service';
+import { SharedTaskService } from './shared-task.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const mockPrismaService = {
   workspace: {
     findUnique: jest.fn(),
   },
-  task: {
+  sharedTask: {
     findMany: jest.fn(),
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -28,22 +28,20 @@ const workspaceWithMember = (userId: string, ownerId = 'owner-1') => ({
   members: [{ id: 'member-1', userId }],
 });
 
-describe('TaskService', () => {
-  let service: TaskService;
+describe('SharedTaskService', () => {
+  let service: SharedTaskService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        TaskService,
+        SharedTaskService,
         { provide: PrismaService, useValue: mockPrismaService },
       ],
     }).compile();
 
-    service = module.get<TaskService>(TaskService);
+    service = module.get<SharedTaskService>(SharedTaskService);
     jest.clearAllMocks();
   });
-
-  // ─── list ───────────────────────────────────────────────────────────────────
 
   describe('list', () => {
     it('returns tasks when caller is a workspace member', async () => {
@@ -53,12 +51,12 @@ describe('TaskService', () => {
       const tasks = [
         { id: 't1', title: 'Send mockups', status: TaskStatus.TODO },
       ];
-      mockPrismaService.task.findMany.mockResolvedValue(tasks);
+      mockPrismaService.sharedTask.findMany.mockResolvedValue(tasks);
 
       const result = await service.list('ws-1', 'user-1');
 
       expect(result).toEqual(tasks);
-      expect(mockPrismaService.task.findMany).toHaveBeenCalledWith(
+      expect(mockPrismaService.sharedTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { workspaceId: 'ws-1' },
           orderBy: { createdAt: 'desc' },
@@ -71,11 +69,11 @@ describe('TaskService', () => {
         ownerId: 'user-1',
         members: [],
       });
-      mockPrismaService.task.findMany.mockResolvedValue([]);
+      mockPrismaService.sharedTask.findMany.mockResolvedValue([]);
 
       await service.list('ws-1', 'user-1');
 
-      expect(mockPrismaService.task.findMany).toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.findMany).toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when caller is not a member', async () => {
@@ -87,7 +85,7 @@ describe('TaskService', () => {
       await expect(service.list('ws-1', 'user-1')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(mockPrismaService.task.findMany).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.findMany).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when workspace does not exist', async () => {
@@ -99,14 +97,12 @@ describe('TaskService', () => {
     });
   });
 
-  // ─── create ─────────────────────────────────────────────────────────────────
-
   describe('create', () => {
     it('persists the task with the caller as creator when member', async () => {
       mockPrismaService.workspace.findUnique.mockResolvedValue(
         workspaceWithMember('user-1'),
       );
-      mockPrismaService.task.create.mockResolvedValue({
+      mockPrismaService.sharedTask.create.mockResolvedValue({
         id: 't1',
         title: 'Send mockups',
         status: TaskStatus.TODO,
@@ -114,7 +110,7 @@ describe('TaskService', () => {
 
       await service.create('ws-1', 'user-1', { title: 'Send mockups' });
 
-      expect(mockPrismaService.task.create).toHaveBeenCalledWith(
+      expect(mockPrismaService.sharedTask.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: {
             workspaceId: 'ws-1',
@@ -134,24 +130,22 @@ describe('TaskService', () => {
       await expect(
         service.create('ws-1', 'user-1', { title: 'Anything' }),
       ).rejects.toThrow(ForbiddenException);
-      expect(mockPrismaService.task.create).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.create).not.toHaveBeenCalled();
     });
   });
 
-  // ─── update ─────────────────────────────────────────────────────────────────
-
   describe('update', () => {
     it('throws NotFoundException when task does not exist', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue(null);
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue(null);
 
       await expect(
         service.update('missing', 'user-1', { status: TaskStatus.DONE }),
       ).rejects.toThrow(NotFoundException);
-      expect(mockPrismaService.task.update).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.update).not.toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when caller is not a workspace member', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         workspaceId: 'ws-1',
       });
@@ -163,25 +157,25 @@ describe('TaskService', () => {
       await expect(
         service.update('t1', 'user-1', { status: TaskStatus.DONE }),
       ).rejects.toThrow(ForbiddenException);
-      expect(mockPrismaService.task.update).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.update).not.toHaveBeenCalled();
     });
 
     it('updates only status when title is omitted', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         workspaceId: 'ws-1',
       });
       mockPrismaService.workspace.findUnique.mockResolvedValue(
         workspaceWithMember('user-1'),
       );
-      mockPrismaService.task.update.mockResolvedValue({
+      mockPrismaService.sharedTask.update.mockResolvedValue({
         id: 't1',
         status: TaskStatus.DONE,
       });
 
       await service.update('t1', 'user-1', { status: TaskStatus.DONE });
 
-      expect(mockPrismaService.task.update).toHaveBeenCalledWith(
+      expect(mockPrismaService.sharedTask.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 't1' },
           data: { status: TaskStatus.DONE },
@@ -190,21 +184,21 @@ describe('TaskService', () => {
     });
 
     it('updates only title when status is omitted', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         workspaceId: 'ws-1',
       });
       mockPrismaService.workspace.findUnique.mockResolvedValue(
         workspaceWithMember('user-1'),
       );
-      mockPrismaService.task.update.mockResolvedValue({
+      mockPrismaService.sharedTask.update.mockResolvedValue({
         id: 't1',
         title: 'New title',
       });
 
       await service.update('t1', 'user-1', { title: 'New title' });
 
-      expect(mockPrismaService.task.update).toHaveBeenCalledWith(
+      expect(mockPrismaService.sharedTask.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 't1' },
           data: { title: 'New title' },
@@ -213,38 +207,36 @@ describe('TaskService', () => {
     });
 
     it('allows any workspace member to update (not only creator)', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         workspaceId: 'ws-1',
       });
       mockPrismaService.workspace.findUnique.mockResolvedValue(
         workspaceWithMember('other-member'),
       );
-      mockPrismaService.task.update.mockResolvedValue({
+      mockPrismaService.sharedTask.update.mockResolvedValue({
         id: 't1',
         status: TaskStatus.DONE,
       });
 
       await service.update('t1', 'other-member', { status: TaskStatus.DONE });
 
-      expect(mockPrismaService.task.update).toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.update).toHaveBeenCalled();
     });
   });
 
-  // ─── remove ─────────────────────────────────────────────────────────────────
-
   describe('remove', () => {
     it('throws NotFoundException when task does not exist', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue(null);
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue(null);
 
       await expect(service.remove('missing', 'user-1')).rejects.toThrow(
         NotFoundException,
       );
-      expect(mockPrismaService.task.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.delete).not.toHaveBeenCalled();
     });
 
     it('throws ForbiddenException when caller is neither creator nor workspace owner', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         createdById: 'someone-else',
         workspace: { ownerId: 'owner-1' },
@@ -253,40 +245,40 @@ describe('TaskService', () => {
       await expect(service.remove('t1', 'user-1')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(mockPrismaService.task.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.delete).not.toHaveBeenCalled();
     });
 
     it('deletes the task when caller is the creator', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         createdById: 'user-1',
         workspace: { ownerId: 'owner-1' },
       });
-      mockPrismaService.task.delete.mockResolvedValue({ id: 't1' });
+      mockPrismaService.sharedTask.delete.mockResolvedValue({ id: 't1' });
 
       const result = await service.remove('t1', 'user-1');
 
-      expect(mockPrismaService.task.delete).toHaveBeenCalledWith({
+      expect(mockPrismaService.sharedTask.delete).toHaveBeenCalledWith({
         where: { id: 't1' },
       });
       expect(result).toEqual({ id: 't1', deleted: true });
     });
 
     it('deletes the task when caller is the workspace owner', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         createdById: 'someone-else',
         workspace: { ownerId: 'owner-1' },
       });
-      mockPrismaService.task.delete.mockResolvedValue({ id: 't1' });
+      mockPrismaService.sharedTask.delete.mockResolvedValue({ id: 't1' });
 
       await service.remove('t1', 'owner-1');
 
-      expect(mockPrismaService.task.delete).toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.delete).toHaveBeenCalled();
     });
 
     it('forbids a non-owner from deleting an orphaned task (createdById null must not match caller)', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         createdById: null,
         workspace: { ownerId: 'owner-1' },
@@ -295,20 +287,20 @@ describe('TaskService', () => {
       await expect(service.remove('t1', 'other-client')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(mockPrismaService.task.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.delete).not.toHaveBeenCalled();
     });
 
     it('lets the workspace owner delete an orphaned task (createdById null)', async () => {
-      mockPrismaService.task.findUnique.mockResolvedValue({
+      mockPrismaService.sharedTask.findUnique.mockResolvedValue({
         id: 't1',
         createdById: null,
         workspace: { ownerId: 'owner-1' },
       });
-      mockPrismaService.task.delete.mockResolvedValue({ id: 't1' });
+      mockPrismaService.sharedTask.delete.mockResolvedValue({ id: 't1' });
 
       await service.remove('t1', 'owner-1');
 
-      expect(mockPrismaService.task.delete).toHaveBeenCalled();
+      expect(mockPrismaService.sharedTask.delete).toHaveBeenCalled();
     });
   });
 });
