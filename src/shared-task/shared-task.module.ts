@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SharedTaskController } from './shared-task.controller';
 import { SharedTaskService } from './shared-task.service';
+import { SharedTaskGateway } from './shared-task.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
@@ -16,7 +17,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     }),
   ],
   controllers: [SharedTaskController],
-  providers: [SharedTaskService],
+  providers: [SharedTaskService, SharedTaskGateway],
   exports: [SharedTaskService],
 })
 export class SharedTaskModule {}

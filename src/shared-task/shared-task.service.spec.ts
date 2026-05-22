@@ -8,6 +8,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { TaskStatus } from '@prisma/client';
 import { SharedTaskService } from './shared-task.service';
+import { SharedTaskGateway } from './shared-task.gateway';
 import { PrismaService } from '../prisma/prisma.service';
 
 const mockPrismaService = {
@@ -23,6 +24,12 @@ const mockPrismaService = {
   },
 };
 
+const mockSharedTaskGateway = {
+  emitTaskCreated: jest.fn(),
+  emitTaskUpdated: jest.fn(),
+  emitTaskDeleted: jest.fn(),
+};
+
 const workspaceWithMember = (userId: string, ownerId = 'owner-1') => ({
   ownerId,
   members: [{ id: 'member-1', userId }],
@@ -36,6 +43,7 @@ describe('SharedTaskService', () => {
       providers: [
         SharedTaskService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SharedTaskGateway, useValue: mockSharedTaskGateway },
       ],
     }).compile();
 

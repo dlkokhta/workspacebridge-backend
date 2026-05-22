@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SharedTaskGateway } from './shared-task.gateway';
 import { CreateSharedTaskDto } from './dto/create-shared-task.dto';
 import { UpdateSharedTaskDto } from './dto/update-shared-task.dto';
 
@@ -20,7 +21,10 @@ const SHARED_TASK_SELECT = {
 
 @Injectable()
 export class SharedTaskService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gateway: SharedTaskGateway,
+  ) {}
 
   async list(workspaceId: string, userId: string) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
