@@ -42,6 +42,7 @@ model User {
   uploadedFiles        File[]              @relation("UploadedFiles")
   addedSharedLinks     SharedLink[]        @relation("AddedSharedLinks")
   createdTasks         SharedTask[]        @relation("CreatedTasks")
+  privateTasks         PrivateTask[]       @relation("PrivateTasks")
 
   @@map("users")
 }
@@ -115,6 +116,7 @@ model Workspace {
   files       File[]
   sharedLinks SharedLink[]
   sharedTasks SharedTask[]
+  privateTasks PrivateTask[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -273,6 +275,28 @@ model SharedTask {
 
   @@index([workspaceId, createdAt])
   @@map("shared_tasks")
+}
+
+model PrivateTask {
+  id String @id @default(uuid())
+
+  // Always belongs to a user — these are personal notes/todos.
+  userId String @map("user_id")
+  user   User   @relation("PrivateTasks", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Optional workspace for context — lets the freelancer filter "private
+  // tasks related to this client" while still owning the task themselves.
+  workspaceId String?    @map("workspace_id")
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  title  String
+  status TaskStatus @default(TODO)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, workspaceId, createdAt])
+  @@map("private_tasks")
 }
 
 model WorkspaceInvite {
