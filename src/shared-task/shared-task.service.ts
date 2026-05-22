@@ -39,7 +39,7 @@ export class SharedTaskService {
   async create(workspaceId: string, userId: string, dto: CreateSharedTaskDto) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
 
-    return this.prisma.sharedTask.create({
+    const task = await this.prisma.sharedTask.create({
       data: {
         workspaceId,
         createdById: userId,
@@ -47,6 +47,9 @@ export class SharedTaskService {
       },
       select: SHARED_TASK_SELECT,
     });
+
+    this.gateway.emitTaskCreated(workspaceId, task);
+    return task;
   }
 
   async update(taskId: string, userId: string, dto: UpdateSharedTaskDto) {
@@ -59,7 +62,7 @@ export class SharedTaskService {
     }
     await this.ensureWorkspaceAccess(task.workspaceId, userId);
 
-    return this.prisma.sharedTask.update({
+    const updated = await this.prisma.sharedTask.update({
       where: { id: taskId },
       data: {
         ...(dto.title !== undefined && { title: dto.title }),
@@ -67,6 +70,9 @@ export class SharedTaskService {
       },
       select: SHARED_TASK_SELECT,
     });
+
+    this.gateway.emitTaskUpdated(task.workspaceId, updated);
+    return updated;
   }
 
   async remove(taskId: string, userId: string) {
@@ -74,6 +80,7 @@ export class SharedTaskService {
       where: { id: taskId },
       select: {
         id: true,
+        workspaceId: true,
         createdById: true,
         workspace: { select: { ownerId: true } },
       },
@@ -91,6 +98,7 @@ export class SharedTaskService {
     }
 
     await this.prisma.sharedTask.delete({ where: { id: taskId } });
+    this.gateway.emitTaskDeleted(task.workspaceId, taskId);
     return { id: taskId, deleted: true };
   }
 
