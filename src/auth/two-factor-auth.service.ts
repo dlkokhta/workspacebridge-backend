@@ -19,6 +19,12 @@ import {
 @Injectable()
 export class TwoFactorAuthService {
   private static readonly MAX_VERIFY_ATTEMPTS_PER_TOKEN = 5;
+  // Pending 2FA setup expires after this window. The user has to scan the
+  // QR code and submit the first TOTP code before it lapses; otherwise
+  // they need to start over with a fresh secret. Long enough to find
+  // your phone and open the authenticator app, short enough that
+  // abandoned setups don't linger.
+  private static readonly PENDING_SETUP_TTL_MS = 15 * 60 * 1000; // 15 min
 
   private readonly jwtSecret: string;
   // Refresh tokens use their own secret; falls back to jwtSecret if
@@ -48,11 +54,19 @@ export class TwoFactorAuthService {
       length: 20,
     });
 
-    // Encrypt at rest. A DB dump no longer hands every user's 2FA seed
-    // to the attacker; they'd also need ENCRYPTION_KEY.
-    await this.prismaService.user.update({
-      where: { id: userId },
-      data: { twoFactorSecret: encryptSecret(secret.base32) },
+    // Stage the unverified secret in PendingTwoFactorSetup rather than
+    // touching users.two_factor_secret. The secret is only promoted to
+    // the user row once enableTwoFactor verifies the first TOTP code.
+    // upsert handles the "user started setup twice" case: the latest
+    // attempt always replaces any older pending row.
+    const encryptedSecret = encryptSecret(secret.base32);
+    const expiresAt = new Date(
+      Date.now() + TwoFactorAuthService.PENDING_SETUP_TTL_MS,
+    );
+    await this.prismaService.pendingTwoFactorSetup.upsert({
+      where: { userId },
+      update: { secret: encryptedSecret, expiresAt },
+      create: { userId, secret: encryptedSecret, expiresAt },
     });
 
     const qrCodeDataURL = await qrcode.toDataURL(secret.otpauth_url!);
@@ -61,18 +75,31 @@ export class TwoFactorAuthService {
   }
 
   async enableTwoFactor(userId: string, code: string) {
-    const user = await this.prismaService.user.findUnique({
-      where: { id: userId },
-    });
+    // Read the unverified secret from the staging table — users.two_factor_secret
+    // is only written once we promote here, so abandoned setups leave no
+    // trace on the user row.
+    const pending =
+      await this.prismaService.pendingTwoFactorSetup.findUnique({
+        where: { userId },
+      });
 
-    if (!user?.twoFactorSecret) {
+    if (!pending) {
       throw new BadRequestException(
         'Please generate a QR code first by calling /auth/2fa/generate',
       );
     }
 
+    if (pending.expiresAt < new Date()) {
+      await this.prismaService.pendingTwoFactorSetup.delete({
+        where: { userId },
+      });
+      throw new BadRequestException(
+        'Setup expired. Please generate a new QR code.',
+      );
+    }
+
     const isValid = speakeasy.totp.verify({
-      secret: decryptSecret(user.twoFactorSecret),
+      secret: decryptSecret(pending.secret),
       encoding: 'base32',
       token: code,
       window: 1,
@@ -82,10 +109,21 @@ export class TwoFactorAuthService {
       throw new UnauthorizedException('Invalid authentication code');
     }
 
-    await this.prismaService.user.update({
-      where: { id: userId },
-      data: { isTwoFactorEnabled: true },
-    });
+    // Promote the verified secret to the user row and clear the staging
+    // entry. From this point onwards login/disable flows read from
+    // users.two_factor_secret as before.
+    await this.prismaService.$transaction([
+      this.prismaService.user.update({
+        where: { id: userId },
+        data: {
+          isTwoFactorEnabled: true,
+          twoFactorSecret: pending.secret,
+        },
+      }),
+      this.prismaService.pendingTwoFactorSetup.delete({
+        where: { userId },
+      }),
+    ]);
 
     return { message: '2FA enabled successfully' };
   }

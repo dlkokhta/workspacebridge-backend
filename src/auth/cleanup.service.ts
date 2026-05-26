@@ -48,17 +48,24 @@ export class CleanupService implements OnModuleInit, OnModuleDestroy {
           where: { expiresAt: { lt: now } },
         });
 
+      const expiredPendingSetups =
+        await this.prismaService.pendingTwoFactorSetup.deleteMany({
+          where: { expiresAt: { lt: now } },
+        });
+
       const total =
         expiredSessions.count +
         expiredTokens.count +
         expiredExchangeCodes.count +
-        expiredTwoFactorAttempts.count;
+        expiredTwoFactorAttempts.count +
+        expiredPendingSetups.count;
       if (total > 0) {
         this.logger.log(
           `Cleanup removed ${expiredSessions.count} sessions, ` +
             `${expiredTokens.count} tokens, ` +
             `${expiredExchangeCodes.count} exchange codes, ` +
-            `${expiredTwoFactorAttempts.count} 2FA attempts`,
+            `${expiredTwoFactorAttempts.count} 2FA attempts, ` +
+            `${expiredPendingSetups.count} pending 2FA setups`,
         );
       }
     } catch (error) {

@@ -114,6 +114,23 @@ model TwoFactorAttempt {
   @@map("two_factor_attempts")
 }
 
+// Staging area for a 2FA TOTP secret that hasn't been confirmed yet.
+// /auth/2fa/generate writes here; /auth/2fa/enable promotes the secret
+// to users.two_factor_secret only after a valid TOTP code is provided.
+// This avoids orphan secrets sitting on the user row when setup is
+// abandoned and removes a footgun for future logic that might check
+// twoFactorSecret IS NOT NULL.
+model PendingTwoFactorSetup {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  secret    String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("pending_two_factor_setups")
+}
+
 model Session {
   id     String @id @default(uuid())
   user   User   @relation(fields: [userId], references: [id])
