@@ -77,13 +77,28 @@ export class TwoFactorAuthService {
     return { message: '2FA enabled successfully' };
   }
 
-  async disableTwoFactor(userId: string, code: string) {
+  async disableTwoFactor(userId: string, code: string, password: string) {
     const user = await this.prismaService.user.findUnique({
       where: { id: userId },
     });
 
     if (!user?.isTwoFactorEnabled || !user?.twoFactorSecret) {
       throw new BadRequestException('2FA is not enabled on this account');
+    }
+
+    // Disabling 2FA is a sensitive action — require fresh password
+    // re-authentication so a hijacked session plus access to the
+    // authenticator app alone is not enough. Google-only users have no
+    // password to verify here; they'd need account recovery instead.
+    if (!user.password) {
+      throw new BadRequestException(
+        'This account has no password set. Use account recovery to disable 2FA.',
+      );
+    }
+
+    const isPasswordValid = await argon2.verify(user.password, password);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid password');
     }
 
     const isValid = speakeasy.totp.verify({

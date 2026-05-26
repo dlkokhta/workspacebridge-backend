@@ -21,7 +21,11 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
-import { TwoFactorCodeDto, VerifyTwoFactorLoginDto } from './dto/two-factor.dto';
+import {
+  DisableTwoFactorDto,
+  TwoFactorCodeDto,
+  VerifyTwoFactorLoginDto,
+} from './dto/two-factor.dto';
 import { GoogleOAuthGuard } from './guards/google-oauth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ApiBody, ApiOperation, ApiTags, ApiResponse, ApiQuery } from '@nestjs/swagger';
@@ -297,21 +301,34 @@ export class AuthController {
   @Post('2fa/disable')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Disable 2FA' })
-  @ApiBody({ type: TwoFactorCodeDto })
+  @ApiOperation({ summary: 'Disable 2FA (requires password re-auth)' })
+  @ApiBody({ type: DisableTwoFactorDto })
   @ApiResponse({ status: 200, description: '2FA disabled successfully' })
-  @ApiResponse({ status: 401, description: 'Invalid code' })
-  public async disableTwoFactor(@Req() req: Request, @Body() body: TwoFactorCodeDto) {
+  @ApiResponse({ status: 401, description: 'Invalid password or code' })
+  public async disableTwoFactor(
+    @Req() req: Request,
+    @Body() body: DisableTwoFactorDto,
+  ) {
     const user = req.user as User;
-    return this.twoFactorAuthService.disableTwoFactor(user.id, body.code);
+    return this.twoFactorAuthService.disableTwoFactor(
+      user.id,
+      body.code,
+      body.password,
+    );
   }
 
   @Post('2fa/verify')
   @HttpCode(HttpStatus.OK)
+  // Brute-force protection: 5 attempts per minute per IP. TOTP space is
+  // 10^6 codes; without this an attacker with a valid password (and thus
+  // a valid 5-minute tempToken) could otherwise try ~300 codes in the
+  // global limit, or many more from distributed IPs.
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Verify 2FA code after login to get full access token' })
   @ApiBody({ type: VerifyTwoFactorLoginDto })
   @ApiResponse({ status: 200, description: 'Returns accessToken + sets refreshToken cookie' })
   @ApiResponse({ status: 401, description: 'Invalid code or expired session' })
+  @ApiResponse({ status: 429, description: 'Too many attempts. Please try again later.' })
   public async verifyTwoFactor(
     @Body() body: VerifyTwoFactorLoginDto,
     @Req() req: Request,
