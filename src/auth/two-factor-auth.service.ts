@@ -17,6 +17,9 @@ export class TwoFactorAuthService {
   private static readonly MAX_VERIFY_ATTEMPTS_PER_TOKEN = 5;
 
   private readonly jwtSecret: string;
+  // Refresh tokens use their own secret; falls back to jwtSecret if
+  // JWT_REFRESH_SECRET is unset. See AuthService for full rationale.
+  private readonly jwtRefreshSecret: string;
   private readonly accessExpiresIn: string;
   private readonly refreshExpiresIn: string;
 
@@ -26,6 +29,8 @@ export class TwoFactorAuthService {
     private readonly configService: ConfigService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
+    this.jwtRefreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') ?? this.jwtSecret;
     this.accessExpiresIn =
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
     this.refreshExpiresIn =
@@ -205,7 +210,7 @@ export class TwoFactorAuthService {
     });
 
     const refreshToken = this.jwtService.sign(refreshPayload, {
-      secret: this.jwtSecret,
+      secret: this.jwtRefreshSecret,
       expiresIn: this.refreshExpiresIn,
     });
 

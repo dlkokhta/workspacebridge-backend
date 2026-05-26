@@ -24,6 +24,11 @@ import { GoogleUser } from './types/google-user.type';
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly jwtSecret: string;
+  // Separate secret for refresh tokens. If one secret leaks, the other
+  // token type can't be forged. Falls back to jwtSecret when
+  // JWT_REFRESH_SECRET is unset so existing deployments keep working —
+  // production should set a distinct value.
+  private readonly jwtRefreshSecret: string;
   private readonly accessExpiresIn: string;
   private readonly refreshExpiresIn: string;
 
@@ -48,6 +53,14 @@ export class AuthService {
     private readonly configService: ConfigService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
+    this.jwtRefreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') ?? this.jwtSecret;
+    if (this.jwtRefreshSecret === this.jwtSecret) {
+      this.logger.warn(
+        'JWT_REFRESH_SECRET is not set — using JWT_SECRET for refresh tokens. ' +
+          'Set a distinct value in production for defense in depth.',
+      );
+    }
     this.accessExpiresIn =
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
     this.refreshExpiresIn =
@@ -163,7 +176,7 @@ export class AuthService {
       expiresIn: this.accessExpiresIn,
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
-      secret: this.jwtSecret,
+      secret: this.jwtRefreshSecret,
       expiresIn: this.refreshExpiresIn,
     });
 
@@ -256,7 +269,7 @@ export class AuthService {
       expiresIn: this.accessExpiresIn,
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
-      secret: this.jwtSecret,
+      secret: this.jwtRefreshSecret,
       expiresIn: this.refreshExpiresIn,
     });
 
@@ -453,7 +466,7 @@ export class AuthService {
       expiresIn: this.accessExpiresIn,
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
-      secret: this.jwtSecret,
+      secret: this.jwtRefreshSecret,
       expiresIn: this.refreshExpiresIn,
     });
 
@@ -486,7 +499,7 @@ export class AuthService {
     let payload: JwtPayload;
     try {
       payload = this.jwtService.verify<JwtPayload>(refreshToken, {
-        secret: this.jwtSecret,
+        secret: this.jwtRefreshSecret,
       });
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
@@ -531,7 +544,7 @@ export class AuthService {
       expiresIn: this.accessExpiresIn,
     });
     const newRefresh = this.jwtService.sign(refreshPayloadNew, {
-      secret: this.jwtSecret,
+      secret: this.jwtRefreshSecret,
       expiresIn: this.refreshExpiresIn,
     });
 
@@ -549,7 +562,7 @@ export class AuthService {
 
   async logout(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify<JwtPayload>(refreshToken, { secret: this.jwtSecret });
+      const payload = this.jwtService.verify<JwtPayload>(refreshToken, { secret: this.jwtRefreshSecret });
 
       if (payload.sessionId) {
         await this.prismaService.session
