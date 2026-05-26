@@ -11,6 +11,10 @@ import * as qrcode from 'qrcode';
 import * as argon2 from 'argon2';
 import { randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
+import {
+  decryptSecret,
+  encryptSecret,
+} from '../libs/common/utils/secret-crypto';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -44,9 +48,11 @@ export class TwoFactorAuthService {
       length: 20,
     });
 
+    // Encrypt at rest. A DB dump no longer hands every user's 2FA seed
+    // to the attacker; they'd also need ENCRYPTION_KEY.
     await this.prismaService.user.update({
       where: { id: userId },
-      data: { twoFactorSecret: secret.base32 },
+      data: { twoFactorSecret: encryptSecret(secret.base32) },
     });
 
     const qrCodeDataURL = await qrcode.toDataURL(secret.otpauth_url!);
@@ -66,7 +72,7 @@ export class TwoFactorAuthService {
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
+      secret: decryptSecret(user.twoFactorSecret),
       encoding: 'base32',
       token: code,
       window: 1,
@@ -109,7 +115,7 @@ export class TwoFactorAuthService {
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
+      secret: decryptSecret(user.twoFactorSecret),
       encoding: 'base32',
       token: code,
       window: 1,
@@ -170,7 +176,7 @@ export class TwoFactorAuthService {
     }
 
     const isValid = speakeasy.totp.verify({
-      secret: user.twoFactorSecret,
+      secret: decryptSecret(user.twoFactorSecret),
       encoding: 'base32',
       token: code,
       window: 1,
