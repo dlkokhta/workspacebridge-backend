@@ -391,6 +391,11 @@ describe('AuthService', () => {
 
       const result = await service.forgotPassword('john@example.com');
 
+      // Work runs in the background to keep response timing constant
+      // (anti-enumeration); flush the microtask queue so we can assert
+      // that the email was actually sent.
+      await new Promise((resolve) => setImmediate(resolve));
+
       expect(mockMailService.sendPasswordResetEmail).toHaveBeenCalledWith(
         'john@example.com',
         expect.any(String),

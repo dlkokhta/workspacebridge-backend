@@ -543,15 +543,24 @@ export class AuthService {
   }
 
   async forgotPassword(email: string) {
-    const user = await this.userService.findByEmail(email);
+    // The response message is identical for known and unknown emails; we
+    // also do the real work (DB writes + email send) asynchronously so
+    // the response timing is constant. Without this, an attacker could
+    // time the response — verified accounts take ~hundreds of ms while
+    // unknown emails return instantly — and enumerate users.
+    void this.processForgotPasswordWork(email).catch((err) => {
+      this.logger.error('Password reset background work failed', err);
+    });
 
-    // Always return the same message to prevent email enumeration
-    if (!user || !user.isVerified) {
-      return {
-        message:
-          'If an account with this email exists, a password reset link has been sent.',
-      };
-    }
+    return {
+      message:
+        'If an account with this email exists, a password reset link has been sent.',
+    };
+  }
+
+  private async processForgotPasswordWork(email: string): Promise<void> {
+    const user = await this.userService.findByEmail(email);
+    if (!user || !user.isVerified) return;
 
     await this.prismaService.token.deleteMany({
       where: { email, type: 'PASSWORD_RESET' },
@@ -568,11 +577,6 @@ export class AuthService {
     });
 
     await this.mailService.sendPasswordResetEmail(email, token);
-
-    return {
-      message:
-        'If an account with this email exists, a password reset link has been sent.',
-    };
   }
 
   async resetPassword(token: string, password: string) {
