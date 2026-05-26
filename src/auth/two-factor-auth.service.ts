@@ -14,6 +14,8 @@ import { JwtPayload } from './types/jwt-payload.type';
 
 @Injectable()
 export class TwoFactorAuthService {
+  private static readonly MAX_VERIFY_ATTEMPTS_PER_TOKEN = 5;
+
   private readonly jwtSecret: string;
   private readonly accessExpiresIn: string;
   private readonly refreshExpiresIn: string;
@@ -137,8 +139,21 @@ export class TwoFactorAuthService {
       );
     }
 
-    if (payload.isTwoFactorAuthenticated !== false) {
+    if (payload.isTwoFactorAuthenticated !== false || !payload.jti) {
       throw new UnauthorizedException('Invalid token type');
+    }
+
+    // Look up the tracking row for this tempToken. Reject if the token was
+    // already consumed (replay), burned by too many failed guesses, or the
+    // record has expired. This is the per-token defense that the per-IP
+    // throttler can't provide against distributed attacks.
+    const attempt = await this.prismaService.twoFactorAttempt.findUnique({
+      where: { jti: payload.jti },
+    });
+    if (!attempt || attempt.consumed || attempt.expiresAt < new Date()) {
+      throw new UnauthorizedException(
+        'Invalid or expired session. Please log in again.',
+      );
     }
 
     const user = await this.prismaService.user.findUnique({
@@ -157,8 +172,24 @@ export class TwoFactorAuthService {
     });
 
     if (!isValid) {
+      // Count the failed attempt. Burn the token (consumed=true) once we
+      // hit the cap so further guesses against this same tempToken are
+      // rejected even if the JWT itself hasn't expired yet.
+      const nextAttempts = attempt.attempts + 1;
+      const shouldBurn =
+        nextAttempts >= TwoFactorAuthService.MAX_VERIFY_ATTEMPTS_PER_TOKEN;
+      await this.prismaService.twoFactorAttempt.update({
+        where: { jti: payload.jti },
+        data: { attempts: nextAttempts, consumed: shouldBurn },
+      });
       throw new UnauthorizedException('Invalid authentication code');
     }
+
+    // Successful verify — burn the token so it can never be replayed.
+    await this.prismaService.twoFactorAttempt.update({
+      where: { jti: payload.jti },
+      data: { consumed: true },
+    });
 
     const sessionId = randomUUID();
     const accessPayload = {

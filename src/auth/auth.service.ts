@@ -404,8 +404,13 @@ export class AuthService {
       });
     }
 
-    // If 2FA is enabled, issue a short-lived pre-auth token instead of full tokens
+    // If 2FA is enabled, issue a short-lived pre-auth token instead of
+    // full tokens. We attach a jti (JWT ID) and persist it as a
+    // TwoFactorAttempt row so /auth/2fa/verify can detect replays and
+    // cap brute-force guesses per token regardless of source IP.
     if (userExist.isTwoFactorEnabled) {
+      const jti = randomUUID();
+      const tempTokenTtlMs = 5 * 60 * 1000;
       const tempToken = this.jwtService.sign(
         {
           userId: userExist.id,
@@ -413,8 +418,15 @@ export class AuthService {
           role: userExist.role,
           isTwoFactorAuthenticated: false,
         },
-        { secret: this.jwtSecret, expiresIn: '5m' },
+        { secret: this.jwtSecret, expiresIn: '5m', jwtid: jti },
       );
+      await this.prismaService.twoFactorAttempt.create({
+        data: {
+          jti,
+          userId: userExist.id,
+          expiresAt: new Date(Date.now() + tempTokenTtlMs),
+        },
+      });
       return { requiresTwoFactor: true as const, tempToken };
     }
 

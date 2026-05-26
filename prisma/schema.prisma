@@ -96,6 +96,24 @@ model AuthExchangeCode {
   @@map("auth_exchange_codes")
 }
 
+// Tracks each 2FA pre-auth tempToken by its jti (JWT ID) claim so we can
+// (a) reject replays of an already-consumed token, and (b) cap brute-force
+// guesses per token regardless of source IP. Without this an attacker who
+// steals a tempToken could replay it within its 5-minute window, and a
+// distributed attacker could outflank the per-IP throttler.
+model TwoFactorAttempt {
+  id        String   @id @default(uuid())
+  jti       String   @unique
+  userId    String   @map("user_id")
+  attempts  Int      @default(0)
+  consumed  Boolean  @default(false)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("two_factor_attempts")
+}
+
 model Session {
   id     String @id @default(uuid())
   user   User   @relation(fields: [userId], references: [id])
