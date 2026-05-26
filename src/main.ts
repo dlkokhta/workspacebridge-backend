@@ -13,6 +13,23 @@ async function bootstrap() {
   app.useLogger(app.get(Logger));
 
   const config = app.get(ConfigService);
+
+  // Trust the reverse proxy so req.ip and X-Forwarded-For reflect the
+  // real client IP — required for honest session IP tracking and for the
+  // per-IP throttler to be per-client (not per-proxy). Driven by env to
+  // avoid spoofing: blindly trusting all sources would let clients fake
+  // their IP via X-Forwarded-For.
+  //   TRUST_PROXY=1                 → trust one upstream hop (Vercel,
+  //                                   Render, Railway, Heroku, etc.)
+  //   TRUST_PROXY=10.0.0.0/8        → trust this CIDR/IP list only
+  //   TRUST_PROXY=loopback          → named subnet
+  //   (unset)                       → no trust (safe dev default)
+  const trustProxy = config.get<string>('TRUST_PROXY');
+  if (trustProxy) {
+    const value = /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy;
+    app.getHttpAdapter().getInstance().set('trust proxy', value);
+  }
+
   app.use(cookieParser());
   app.use(helmet());
   // const redis = new IORedis(config.getOrThrow<string>('REDIS_URL'));
