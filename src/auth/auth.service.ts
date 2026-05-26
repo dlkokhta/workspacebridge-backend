@@ -76,19 +76,32 @@ export class AuthService {
     }
   }
 
-  private async registerFailedLogin(userId: string, currentAttempts: number) {
-    const newAttempts = currentAttempts + 1;
-    const shouldLock = newAttempts >= AuthService.MAX_FAILED_LOGIN_ATTEMPTS;
-
-    await this.prismaService.user.update({
+  // Atomic increment + conditional lock. The previous read-modify-write
+  // pattern (read currentAttempts, write currentAttempts + 1) raced under
+  // concurrent failed logins for the same user — both requests could read
+  // 3, then both write 4, undercounting toward the lockout threshold.
+  // Using Prisma's `{ increment: 1 }` pushes the increment to SQL where
+  // it's atomic; the returned row tells us the real post-increment count
+  // and we apply the lock in a second update if needed.
+  private async registerFailedLogin(userId: string) {
+    const updated = await this.prismaService.user.update({
       where: { id: userId },
-      data: {
-        failedLoginAttempts: newAttempts,
-        lockedUntil: shouldLock
-          ? new Date(Date.now() + AuthService.LOCKOUT_DURATION_MS)
-          : null,
-      },
+      data: { failedLoginAttempts: { increment: 1 } },
+      select: { failedLoginAttempts: true },
     });
+
+    if (
+      updated.failedLoginAttempts >= AuthService.MAX_FAILED_LOGIN_ATTEMPTS
+    ) {
+      await this.prismaService.user.update({
+        where: { id: userId },
+        data: {
+          lockedUntil: new Date(
+            Date.now() + AuthService.LOCKOUT_DURATION_MS,
+          ),
+        },
+      });
+    }
   }
 
   // ── OAuth exchange code (avoid token-in-URL after Google redirect) ────────
@@ -364,10 +377,7 @@ export class AuthService {
     if (!userExist || !isCredentialsAccount || !passwordMatches) {
       if (userExist && isCredentialsAccount && !passwordMatches) {
         // Only count failed attempts for real password-method users.
-        await this.registerFailedLogin(
-          userExist.id,
-          userExist.failedLoginAttempts,
-        );
+        await this.registerFailedLogin(userExist.id);
       }
       this.logger.debug(
         `Login failed for ${loginUserDto.email}: ${
