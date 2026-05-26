@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { WhiteboardService } from './whiteboard.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { JoinBoardDto } from './dto/join-board.dto';
 import { SceneUpdateDto } from './dto/scene-update.dto';
 import { PointerUpdateDto } from './dto/pointer-update.dto';
@@ -22,6 +23,7 @@ interface AuthenticatedSocket extends Socket {
   userEmail: string;
   firstname: string | null;
   lastname: string | null;
+  tokenExpiresAt?: number;
 }
 
 type PendingPayload = {
@@ -74,6 +76,10 @@ export class WhiteboardGateway
       client.userEmail = payload.email;
       client.firstname = null;
       client.lastname = null;
+      // Recorded so handlers can drop the socket once the access token
+      // expires — verifying the JWT only at connect time isn't enough
+      // when boards stay open for hours.
+      client.tokenExpiresAt = payload.exp;
     } catch {
       client.disconnect();
     }
@@ -103,6 +109,7 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: JoinBoardDto,
   ) {
+    if (rejectExpiredSocket(client)) return;
     const { boardId } = body;
     const allowed = await this.whiteboardService.canAccessBoard(
       boardId,
@@ -138,6 +145,7 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: SceneUpdateDto,
   ) {
+    if (rejectExpiredSocket(client)) return;
     const { boardId, elements, appState, files } = body;
 
     const allowed = await this.whiteboardService.canAccessBoard(
@@ -165,6 +173,7 @@ export class WhiteboardGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: PointerUpdateDto,
   ) {
+    if (rejectExpiredSocket(client)) return;
     const { boardId, pointer, button } = body;
 
     if (!client.rooms.has(boardId)) return;

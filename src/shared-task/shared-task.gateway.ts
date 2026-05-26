@@ -13,11 +13,13 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { JoinSharedTaskRoomDto } from './dto/join-shared-task-room.dto';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
   userEmail: string;
+  tokenExpiresAt?: number;
 }
 
 @WebSocketGateway({
@@ -57,6 +59,10 @@ export class SharedTaskGateway
 
       client.userId = payload.userId;
       client.userEmail = payload.email;
+      // Recorded so handlers can drop the socket once the access token
+      // expires — verifying the JWT only at connect time isn't enough
+      // when the socket lives for hours.
+      client.tokenExpiresAt = payload.exp;
     } catch {
       client.disconnect();
     }
@@ -71,6 +77,7 @@ export class SharedTaskGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: JoinSharedTaskRoomDto,
   ) {
+    if (rejectExpiredSocket(client)) return;
     const { workspaceId } = body;
 
     const isMember = await this.isWorkspaceMember(workspaceId, client.userId);
