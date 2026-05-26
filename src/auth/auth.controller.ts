@@ -148,7 +148,10 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  // 5 attempts per 5 minutes per IP. Slows distributed brute-force attacks
+  // while still leaving room for a legitimate user who fumbles their
+  // password a few times.
+  @Throttle({ default: { ttl: 300000, limit: 5 } })
   @ApiOperation({ summary: 'Login with email and password' })
   @ApiBody({ type: LoginUserDto })
   @ApiResponse({ status: 200, description: 'Returns accessToken and user info. Sets refreshToken cookie.' })
@@ -244,7 +247,9 @@ export class AuthController {
 
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { ttl: 60000, limit: 3 } })
+  // Password resets are rare for legitimate users; 3 per 15 min per IP is
+  // generous for real use and tighter against bulk probing.
+  @Throttle({ default: { ttl: 900000, limit: 3 } })
   @ApiOperation({ summary: 'Send password reset email' })
   @ApiBody({ type: ForgotPasswordDto })
   @ApiResponse({ status: 200, description: 'Reset email sent if account exists' })
