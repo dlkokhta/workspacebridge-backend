@@ -188,20 +188,28 @@ describe('AuthService', () => {
   // ─── loginUser ──────────────────────────────────────────────────────────────
 
   describe('loginUser', () => {
-    it('throws NotFoundException when user is not found', async () => {
+    it('throws generic Invalid credentials when user is not found', async () => {
       mockUserService.findByEmail.mockResolvedValue(null);
+      mockedHash.mockResolvedValue('dummy-hash' as never);
+      mockedVerify.mockResolvedValue(false);
 
       await expect(
         service.loginUser({ email: 'nobody@example.com', password: 'pass' }),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toThrow(
+        new UnauthorizedException('Invalid credentials'),
+      );
     });
 
-    it('throws UnauthorizedException for Google account users', async () => {
+    it('throws generic Invalid credentials for Google-only accounts', async () => {
       mockUserService.findByEmail.mockResolvedValue({ ...fakeUser, method: 'GOOGLE' });
+      mockedHash.mockResolvedValue('dummy-hash' as never);
+      mockedVerify.mockResolvedValue(false);
 
       await expect(
         service.loginUser({ email: 'john@example.com', password: 'pass' }),
-      ).rejects.toThrow(UnauthorizedException);
+      ).rejects.toThrow(
+        new UnauthorizedException('Invalid credentials'),
+      );
     });
 
     it('throws UnauthorizedException when password is incorrect', async () => {

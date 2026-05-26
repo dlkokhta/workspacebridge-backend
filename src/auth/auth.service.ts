@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -21,9 +22,23 @@ import { GoogleUser } from './types/google-user.type';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private readonly jwtSecret: string;
   private readonly accessExpiresIn: string;
   private readonly refreshExpiresIn: string;
+
+  // Precomputed argon2 hash used as a constant-time dummy during failed
+  // logins. Verifying against this takes the same time as a real
+  // verification, so attackers can't tell from response timing whether
+  // an email is registered. Lazily initialized on first use.
+  private dummyHashPromise: Promise<string> | null = null;
+
+  private getDummyHash(): Promise<string> {
+    if (!this.dummyHashPromise) {
+      this.dummyHashPromise = argon2.hash(`dummy-${randomUUID()}`);
+    }
+    return this.dummyHashPromise;
+  }
 
   constructor(
     private readonly userService: UserService,
@@ -329,17 +344,45 @@ export class AuthService {
   async loginUser(loginUserDto: LoginUserDto, ip?: string, userAgent?: string) {
     const userExist = await this.userService.findByEmail(loginUserDto.email);
 
-    if (!userExist) {
-      throw new NotFoundException('User not found. Please register first.');
-    }
+    // Constant-time password check: always run argon2.verify so timing
+    // doesn't reveal whether the email is registered. Use the real hash if
+    // the account exists and is a CREDENTIALS account, otherwise verify
+    // against a dummy hash that always fails.
+    const isCredentialsAccount =
+      !!userExist && userExist.method === 'CREDENTIALS' && !!userExist.password;
+    const hashToCheck = isCredentialsAccount
+      ? userExist!.password!
+      : await this.getDummyHash();
+    const passwordMatches = await argon2.verify(
+      hashToCheck,
+      loginUserDto.password,
+    );
 
-    if (userExist.method === 'GOOGLE') {
-      throw new UnauthorizedException(
-        'This account uses Google Sign-In. Please use the "Continue with Google" button.',
+    // Any of: unknown email, Google-only account, or wrong password → same
+    // generic response to prevent user enumeration. The real reason is
+    // logged server-side for debugging.
+    if (!userExist || !isCredentialsAccount || !passwordMatches) {
+      if (userExist && isCredentialsAccount && !passwordMatches) {
+        // Only count failed attempts for real password-method users.
+        await this.registerFailedLogin(
+          userExist.id,
+          userExist.failedLoginAttempts,
+        );
+      }
+      this.logger.debug(
+        `Login failed for ${loginUserDto.email}: ${
+          !userExist
+            ? 'no such user'
+            : !isCredentialsAccount
+              ? `wrong method (${userExist.method})`
+              : 'wrong password'
+        }`,
       );
+      throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Account lockout check
+    // Account lockout check (only meaningful once the password matched —
+    // exposing it earlier would also leak whether the email is registered).
     if (userExist.lockedUntil && userExist.lockedUntil > new Date()) {
       const minutesLeft = Math.ceil(
         (userExist.lockedUntil.getTime() - Date.now()) / 60000,
@@ -347,20 +390,6 @@ export class AuthService {
       throw new UnauthorizedException(
         `Account locked due to too many failed login attempts. Try again in ${minutesLeft} minute(s).`,
       );
-    }
-
-    if (!userExist.password) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    const isValidPassword = await argon2.verify(
-      userExist.password,
-      loginUserDto.password,
-    );
-
-    if (!isValidPassword) {
-      await this.registerFailedLogin(userExist.id, userExist.failedLoginAttempts);
-      throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!userExist.isVerified) {
