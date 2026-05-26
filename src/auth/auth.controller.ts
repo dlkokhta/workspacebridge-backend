@@ -63,22 +63,65 @@ export class AuthController {
         userAgent,
       );
 
-      res.cookie('refreshToken', result.refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        path: '/',
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      });
-
-      // Send only the access token to frontend
-      return res.redirect(
-        `${frontendUrl}/auth/success?token=${result.accessToken}`,
+      // The access token never goes through the URL (it would leak via
+      // browser history, server logs, Referer header, analytics scripts).
+      // Instead we mint a short-lived single-use exchange code that the
+      // frontend immediately POSTs to /auth/exchange to get the real tokens.
+      // The session row that findOrCreateGoogleUser just created is
+      // discarded — /auth/exchange will create a fresh session that the
+      // frontend actually holds the refresh token for.
+      await this.authService.logout(result.refreshToken);
+      const exchangeCode = await this.authService.createExchangeCode(
+        result.userExist.id,
       );
+
+      return res.redirect(`${frontendUrl}/auth/success?code=${exchangeCode}`);
     } catch (error) {
       this.logger.error('Google OAuth callback failed', error);
       return res.redirect(`${frontendUrl}/auth/error?error=oauth_failed`);
     }
+  }
+
+  @Post('exchange')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({
+    summary:
+      'Exchange a short-lived OAuth code for tokens (sets refresh cookie)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns user + accessToken; sets refreshToken cookie',
+  })
+  @ApiResponse({ status: 401, description: 'Invalid or expired code' })
+  @ApiResponse({ status: 429, description: 'Too many attempts.' })
+  public async exchangeOAuthCode(
+    @Body() body: { code: string },
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    if (!body?.code || typeof body.code !== 'string') {
+      throw new UnauthorizedException('Invalid or expired exchange code');
+    }
+
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
+    const result = await this.authService.exchangeCodeForTokens(
+      body.code,
+      ip,
+      userAgent,
+    );
+
+    res.cookie('refreshToken', result.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    const { refreshToken: _rt, ...rest } = result;
+    return rest;
   }
 
   // Get user profile

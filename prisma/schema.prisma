@@ -81,6 +81,21 @@ model Token {
   @@map("tokens")
 }
 
+// Short-lived single-use code used to exchange a Google OAuth redirect for
+// real tokens without putting the access token in the URL. The code lands
+// in the browser via ?code=… and is immediately POSTed to /auth/exchange
+// where the backend issues the actual access token + refresh cookie.
+model AuthExchangeCode {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("auth_exchange_codes")
+}
+
 model Session {
   id     String @id @default(uuid())
   user   User   @relation(fields: [userId], references: [id])

@@ -76,6 +76,92 @@ export class AuthService {
     });
   }
 
+  // ── OAuth exchange code (avoid token-in-URL after Google redirect) ────────
+
+  private static readonly EXCHANGE_CODE_TTL_MS = 30 * 1000; // 30 seconds
+
+  // Mint a short-lived single-use code that the frontend will POST to
+  // /auth/exchange immediately. The actual access/refresh tokens never go
+  // through the URL.
+  public async createExchangeCode(userId: string): Promise<string> {
+    const code = randomUUID();
+    await this.prismaService.authExchangeCode.create({
+      data: {
+        code,
+        userId,
+        expiresAt: new Date(Date.now() + AuthService.EXCHANGE_CODE_TTL_MS),
+      },
+    });
+    return code;
+  }
+
+  // Consume an exchange code: validate, delete (single-use), then issue real
+  // tokens the same way a regular login would.
+  public async exchangeCodeForTokens(
+    code: string,
+    ip?: string,
+    userAgent?: string,
+  ) {
+    const record = await this.prismaService.authExchangeCode.findUnique({
+      where: { code },
+    });
+
+    if (!record) {
+      throw new UnauthorizedException('Invalid or expired exchange code');
+    }
+
+    // Burn the code regardless of outcome so it can never be reused.
+    await this.prismaService.authExchangeCode.delete({ where: { code } });
+
+    if (record.expiresAt < new Date()) {
+      throw new UnauthorizedException('Invalid or expired exchange code');
+    }
+
+    const user = await this.userService.findById(record.userId);
+    if (!user) {
+      throw new UnauthorizedException('User no longer exists');
+    }
+
+    const sessionId = randomUUID();
+    const accessPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+    };
+    const refreshPayload = { ...accessPayload, sessionId };
+
+    const accessToken = this.jwtService.sign(accessPayload, {
+      secret: this.jwtSecret,
+      expiresIn: this.accessExpiresIn,
+    });
+    const refreshToken = this.jwtService.sign(refreshPayload, {
+      secret: this.jwtSecret,
+      expiresIn: this.refreshExpiresIn,
+    });
+
+    const hashedRefreshToken = await argon2.hash(refreshToken);
+
+    await this.enforceSessionLimit(user.id);
+
+    await this.prismaService.session.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        refreshToken: hashedRefreshToken,
+        ip,
+        userAgent,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const { password: _password, ...userWithoutPassword } = user;
+    return {
+      user: userWithoutPassword,
+      accessToken,
+      refreshToken,
+    };
+  }
+
   // ── Token helpers ──────────────────────────────────────────────────────────
 
   private async createVerificationToken(email: string): Promise<string> {
