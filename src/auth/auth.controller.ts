@@ -12,7 +12,7 @@ import {
   UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import { CookieOptions, Request, Response } from 'express';
 import { User } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { GoogleUser } from './types/google-user.type';
@@ -42,6 +42,33 @@ export class AuthController {
     private readonly twoFactorAuthService: TwoFactorAuthService,
     private readonly configService: ConfigService,
   ) {}
+
+  // Centralized cookie attributes for the refresh token. Driven by env so
+  // cross-domain deployments (frontend on a different eTLD+1 than the API)
+  // can use sameSite='none' + secure=true, while same-site deployments
+  // can stay on 'strict' or 'lax'. Used by every set/clear call below so
+  // the browser actually clears the cookie it previously stored.
+  //
+  // Defaults:
+  //   - production: sameSite='none', secure=true (works cross-domain)
+  //   - dev:        sameSite='lax',  secure=false (works on localhost)
+  // Override via the COOKIE_SAMESITE env variable.
+  private getRefreshCookieOptions(): CookieOptions {
+    const isProduction = process.env.NODE_ENV === 'production';
+    const sameSite = (this.configService.get<string>('COOKIE_SAMESITE') ??
+      (isProduction ? 'none' : 'lax')) as 'strict' | 'lax' | 'none';
+    // sameSite='none' is rejected by browsers unless the cookie is also
+    // marked secure, so we force secure=true in that case regardless of
+    // NODE_ENV.
+    const secure = sameSite === 'none' ? true : isProduction;
+    return {
+      httpOnly: true,
+      secure,
+      sameSite,
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
+  }
 
   // Google OAuth Login - Step 1: Redirect to Google
   @Get('google')
@@ -116,13 +143,7 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('refreshToken', result.refreshToken, this.getRefreshCookieOptions());
 
     const { refreshToken: _rt, ...rest } = result;
     return rest;
@@ -179,13 +200,7 @@ export class AuthController {
       return loginResult; // { requiresTwoFactor: true, tempToken }
     }
 
-    res.cookie('refreshToken', loginResult.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    res.cookie('refreshToken', loginResult.refreshToken, this.getRefreshCookieOptions());
 
     const { refreshToken: _rt, ...result } = loginResult;
     return result; // JSON body: { user, accessToken }
@@ -205,13 +220,7 @@ export class AuthController {
 
     const tokens = await this.authService.refresh(refreshToken);
 
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('refreshToken', tokens.refreshToken, this.getRefreshCookieOptions());
 
     return { accessToken: tokens.accessToken };
   }
@@ -230,9 +239,9 @@ export class AuthController {
       await this.authService.logout(refreshToken);
     }
 
-    res.clearCookie('refreshToken', {
-      path: '/',
-    });
+    // Match the attributes the cookie was set with so the browser will
+    // actually drop it (Chrome/Firefox compare sameSite + secure on clear).
+    res.clearCookie('refreshToken', this.getRefreshCookieOptions());
 
     return { message: 'Logged out successfully' };
   }
@@ -343,13 +352,7 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('refreshToken', result.refreshToken, this.getRefreshCookieOptions());
 
     const { refreshToken: _rt, ...rest } = result;
     return rest; // { user, accessToken }
