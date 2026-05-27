@@ -90,8 +90,19 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 ### User management
 - View / update profile (name)
 - Change password (re-validates current password)
-- Admin panel — list users, change role, delete user, pagination
 - Role-based access control: `FREELANCER` / `CLIENT` / `ADMIN`
+- User status: `ACTIVE` / `SUSPENDED`
+
+### Admin panel
+- **Dashboard** — platform stats, signup/workspace trends (30-day chart)
+- **User management** — list, detail view, role change, suspend/activate, reset password, force-verify, delete
+- **Workspace management** — list with owner and member count, status change, delete
+- **Invite management** — list all platform invites, revoke
+- **Session management** — list all sessions, force-logout (revoke)
+- **File management** — list all files, storage stats per workspace, permanent delete from R2
+- **Audit log** — tracks all admin actions with actor, target, metadata, timestamp
+- **Platform settings** — configurable invite expiry, max file size, maintenance mode, registration toggle
+- All admin actions are audit-logged
 
 ### Messaging
 - Realtime chat per workspace via Socket.IO
@@ -251,9 +262,27 @@ npm run test:e2e   # end-to-end
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/admin/users` | Get all users (paginated) |
+| GET | `/admin/stats` | Platform statistics (users, workspaces, signups/day) |
+| GET | `/admin/users` | List all users |
+| GET | `/admin/users/:id` | User detail (workspaces, sessions, invites) |
 | PATCH | `/admin/users/:id/role` | Change user role |
+| PATCH | `/admin/users/:id/status` | Suspend / activate user |
+| POST | `/admin/users/:id/reset-password` | Send password reset email |
+| POST | `/admin/users/:id/force-verify` | Force-verify user email |
 | DELETE | `/admin/users/:id` | Delete user |
+| GET | `/admin/workspaces` | List all workspaces (with owner, member count) |
+| PATCH | `/admin/workspaces/:id/status` | Change workspace status |
+| DELETE | `/admin/workspaces/:id` | Delete workspace |
+| GET | `/admin/invites` | List all invites |
+| DELETE | `/admin/invites/:id` | Revoke invite |
+| GET | `/admin/sessions` | List all sessions |
+| DELETE | `/admin/sessions/:id` | Revoke session (force logout) |
+| GET | `/admin/files` | List all files |
+| GET | `/admin/files/stats` | File storage stats (total size, per workspace) |
+| DELETE | `/admin/files/:id` | Permanently delete file (removes from R2) |
+| GET | `/admin/audit-log` | Audit log (last 200 entries) |
+| GET | `/admin/settings` | Platform settings |
+| PATCH | `/admin/settings/:key` | Update a platform setting |
 
 ### Messages (`/workspace/:workspaceId/messages`) — requires JWT
 
@@ -353,6 +382,8 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `Whiteboard` | Excalidraw board with scene JSON |
 | `WhiteboardComment` | Comment pinned to an Excalidraw element |
 | `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
+| `AuditLog` | Admin action audit trail (actor, action, target, metadata) |
+| `PlatformSetting` | Key-value platform configuration (invite expiry, file limits, feature flags) |
 
 ## File Storage Plans
 
@@ -402,7 +433,7 @@ Two paths free those bytes:
 src/
 ├── auth/          # Login, register, OAuth, JWT strategies, 2FA, cleanup job
 ├── user/          # Profile, password change
-├── admin/         # User management
+├── admin/         # Admin panel (stats, users, workspaces, invites, sessions, files, audit log, settings)
 ├── workspace/     # Workspace CRUD
 ├── invite/        # Invite generation, email sending, accept flow
 ├── message/       # Workspace chat (REST history + Socket.IO gateway)
