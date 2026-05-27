@@ -383,6 +383,21 @@ model WorkspaceMember {
   @@map("workspace_members")
 }
 
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  actorId    String   @map("actor_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
 enum WorkspaceStatus {
   ACTIVE
   COMPLETED
