@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, UseGuards } from '@nestjs/common';
-import { UserRole, WorkspaceStatus } from '@prisma/client';
+import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -12,6 +12,12 @@ class UpdateUserRoleDto {
   @ApiProperty({ enum: UserRole, example: UserRole.ADMIN })
   @IsEnum(UserRole)
   role: UserRole;
+}
+
+class UpdateUserStatusDto {
+  @ApiProperty({ enum: UserStatus, example: UserStatus.SUSPENDED })
+  @IsEnum(UserStatus)
+  status: UserStatus;
 }
 
 class UpdateWorkspaceStatusDto {
@@ -53,6 +59,17 @@ export class AdminController {
     @Body() dto: UpdateUserRoleDto,
   ) {
     return this.adminService.updateUserRole(id, dto.role);
+  }
+
+  @Patch('users/:id/status')
+  @ApiOperation({ summary: 'Suspend or activate user (Admin only)' })
+  @ApiResponse({ status: 200, description: 'User status updated' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  public async updateUserStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserStatusDto,
+  ) {
+    return this.adminService.updateUserStatus(id, dto.status);
   }
 
   @Delete('users/:id')

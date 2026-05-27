@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole, WorkspaceStatus } from '@prisma/client';
+import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -94,6 +94,7 @@ export class AdminService {
         firstname: true,
         lastname: true,
         role: true,
+        status: true,
         method: true,
         isVerified: true,
         createdAt: true,
@@ -119,6 +120,17 @@ export class AdminService {
 
     await this.prismaService.user.delete({ where: { id } });
     return { message: 'User deleted successfully' };
+  }
+
+  public async updateUserStatus(id: string, status: UserStatus) {
+    const user = await this.prismaService.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prismaService.user.update({
+      where: { id },
+      data: { status },
+      select: { id: true, email: true, status: true },
+    });
   }
 
   public async getWorkspaces() {
