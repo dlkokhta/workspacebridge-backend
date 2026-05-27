@@ -398,6 +398,14 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
 enum WorkspaceStatus {
   ACTIVE
   COMPLETED
