@@ -292,4 +292,58 @@ export class AdminService {
     await this.prismaService.workspace.delete({ where: { id } });
     return { message: 'Workspace deleted successfully' };
   }
+
+  public async getInvites() {
+    return this.prismaService.workspaceInvite.findMany({
+      select: {
+        id: true,
+        email: true,
+        createdAt: true,
+        expiresAt: true,
+        usedAt: true,
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            owner: {
+              select: { id: true, email: true, firstname: true, lastname: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async deleteInvite(id: string) {
+    const invite = await this.prismaService.workspaceInvite.findUnique({ where: { id } });
+    if (!invite) throw new NotFoundException('Invite not found');
+
+    await this.prismaService.workspaceInvite.delete({ where: { id } });
+    return { message: 'Invite revoked successfully' };
+  }
+
+  public async getSessions() {
+    return this.prismaService.session.findMany({
+      select: {
+        id: true,
+        ip: true,
+        userAgent: true,
+        createdAt: true,
+        expiresAt: true,
+        user: {
+          select: { id: true, email: true, firstname: true, lastname: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async deleteSession(id: string) {
+    const session = await this.prismaService.session.findUnique({ where: { id } });
+    if (!session) throw new NotFoundException('Session not found');
+
+    await this.prismaService.session.delete({ where: { id } });
+    return { message: 'Session revoked successfully' };
+  }
 }

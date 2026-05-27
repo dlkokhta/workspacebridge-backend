@@ -130,4 +130,36 @@ export class AdminController {
   public async deleteWorkspace(@Param('id') id: string) {
     return this.adminService.deleteWorkspace(id);
   }
+
+  @Get('invites')
+  @ApiOperation({ summary: 'Get all invites across the platform (Admin only)' })
+  @ApiResponse({ status: 200, description: 'List of all invites' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getInvites() {
+    return this.adminService.getInvites();
+  }
+
+  @Delete('invites/:id')
+  @ApiOperation({ summary: 'Revoke an invite (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Invite revoked successfully' })
+  @ApiResponse({ status: 404, description: 'Invite not found' })
+  public async deleteInvite(@Param('id') id: string) {
+    return this.adminService.deleteInvite(id);
+  }
+
+  @Get('sessions')
+  @ApiOperation({ summary: 'Get all active sessions (Admin only)' })
+  @ApiResponse({ status: 200, description: 'List of all sessions' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getSessions() {
+    return this.adminService.getSessions();
+  }
+
+  @Delete('sessions/:id')
+  @ApiOperation({ summary: 'Revoke a session / force logout (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Session revoked successfully' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  public async deleteSession(@Param('id') id: string) {
+    return this.adminService.deleteSession(id);
+  }
 }
