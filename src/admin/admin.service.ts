@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { UserRole, WorkspaceStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -119,5 +119,49 @@ export class AdminService {
 
     await this.prismaService.user.delete({ where: { id } });
     return { message: 'User deleted successfully' };
+  }
+
+  public async getWorkspaces() {
+    return this.prismaService.workspace.findMany({
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        color: true,
+        status: true,
+        createdAt: true,
+        owner: {
+          select: {
+            id: true,
+            email: true,
+            firstname: true,
+            lastname: true,
+          },
+        },
+        _count: {
+          select: { members: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async updateWorkspaceStatus(id: string, status: WorkspaceStatus) {
+    const workspace = await this.prismaService.workspace.findUnique({ where: { id } });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    return this.prismaService.workspace.update({
+      where: { id },
+      data: { status },
+      select: { id: true, name: true, status: true },
+    });
+  }
+
+  public async deleteWorkspace(id: string) {
+    const workspace = await this.prismaService.workspace.findUnique({ where: { id } });
+    if (!workspace) throw new NotFoundException('Workspace not found');
+
+    await this.prismaService.workspace.delete({ where: { id } });
+    return { message: 'Workspace deleted successfully' };
   }
 }
