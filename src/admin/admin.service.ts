@@ -3,12 +3,14 @@ import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { StorageService } from '../file/storage/storage.service';
 
 @Injectable()
 export class AdminService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly mailService: MailService,
+    private readonly storageService: StorageService,
   ) {}
 
   public async getStats() {
@@ -345,5 +347,71 @@ export class AdminService {
 
     await this.prismaService.session.delete({ where: { id } });
     return { message: 'Session revoked successfully' };
+  }
+
+  public async getFiles() {
+    return this.prismaService.file.findMany({
+      select: {
+        id: true,
+        name: true,
+        mimeType: true,
+        size: true,
+        deletedAt: true,
+        createdAt: true,
+        workspace: {
+          select: { id: true, name: true },
+        },
+        uploadedBy: {
+          select: { id: true, email: true, firstname: true, lastname: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async getFileStats() {
+    const [totalFiles, totalSize, perWorkspace] = await Promise.all([
+      this.prismaService.file.count({ where: { deletedAt: null } }),
+      this.prismaService.file.aggregate({
+        where: { deletedAt: null },
+        _sum: { size: true },
+      }),
+      this.prismaService.file.groupBy({
+        by: ['workspaceId'],
+        where: { deletedAt: null },
+        _count: true,
+        _sum: { size: true },
+      }),
+    ]);
+
+    const workspaceIds = perWorkspace.map((r) => r.workspaceId);
+    const workspaces = await this.prismaService.workspace.findMany({
+      where: { id: { in: workspaceIds } },
+      select: { id: true, name: true },
+    });
+    const nameMap = new Map(workspaces.map((w) => [w.id, w.name]));
+
+    return {
+      totalFiles,
+      totalSize: totalSize._sum.size ?? 0,
+      perWorkspace: perWorkspace.map((r) => ({
+        workspaceId: r.workspaceId,
+        workspaceName: nameMap.get(r.workspaceId) ?? 'Unknown',
+        fileCount: r._count,
+        totalSize: r._sum.size ?? 0,
+      })),
+    };
+  }
+
+  public async deleteFile(id: string) {
+    const file = await this.prismaService.file.findUnique({
+      where: { id },
+      select: { id: true, storageKey: true },
+    });
+    if (!file) throw new NotFoundException('File not found');
+
+    await this.storageService.delete(file.storageKey).catch(() => undefined);
+    await this.prismaService.file.delete({ where: { id } });
+    return { message: 'File deleted successfully' };
   }
 }

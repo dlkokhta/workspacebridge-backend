@@ -162,4 +162,28 @@ export class AdminController {
   public async deleteSession(@Param('id') id: string) {
     return this.adminService.deleteSession(id);
   }
+
+  @Get('files')
+  @ApiOperation({ summary: 'Get all files across the platform (Admin only)' })
+  @ApiResponse({ status: 200, description: 'List of all files' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getFiles() {
+    return this.adminService.getFiles();
+  }
+
+  @Get('files/stats')
+  @ApiOperation({ summary: 'Get file storage stats (Admin only)' })
+  @ApiResponse({ status: 200, description: 'File storage statistics' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getFileStats() {
+    return this.adminService.getFileStats();
+  }
+
+  @Delete('files/:id')
+  @ApiOperation({ summary: 'Permanently delete a file (Admin only)' })
+  @ApiResponse({ status: 200, description: 'File deleted successfully' })
+  @ApiResponse({ status: 404, description: 'File not found' })
+  public async deleteFile(@Param('id') id: string) {
+    return this.adminService.deleteFile(id);
+  }
 }
