@@ -29,7 +29,7 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 | Auth | JWT (access + refresh), Google OAuth 2.0, TOTP 2FA |
 | Password hashing | Argon2 |
 | Email | Resend |
-| Security | Helmet, @nestjs/throttler, argon2-hashed refresh tokens |
+| Security | Helmet, @nestjs/throttler, argon2 hashing, AES-256-GCM at-rest encryption for 2FA secrets, refresh-token rotation, account lockout |
 | Logging | nestjs-pino (pretty in dev, JSON in prod) |
 | API Docs | Swagger / OpenAPI |
 | Testing | Jest + Supertest |
@@ -39,21 +39,40 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 
 ### Authentication
 - Register & login with email/password
-- Google OAuth 2.0 (one-click sign-in)
+- Google OAuth 2.0 (one-click sign-in) — token is **never put in the redirect URL**. The callback mints a short-lived single-use `AuthExchangeCode`, the frontend POSTs it to `/auth/exchange`, and tokens are returned in the response body
 - Email verification required before login (24h token)
-- Forgot / reset password via email (1h token)
-- TOTP 2FA — Google Authenticator / Authy compatible (enable, disable, verify on login)
+- Forgot / reset password via email (1h token) — runs the real work **asynchronously** so unknown / known emails have identical response timing (no enumeration via timing oracle)
+- TOTP 2FA — Google Authenticator / Authy compatible
 - JWT access token (15m) + refresh token (7d) with rotation on every refresh
+- **Separate `JWT_REFRESH_SECRET`** — leaking the access-token secret can't be turned into forged refresh tokens
 - Refresh tokens stored as **argon2 hashes** in the database; plaintext never persists
-- HttpOnly, `sameSite: strict` refresh cookie (CSRF-resistant)
+- HttpOnly refresh cookie with **env-driven `SameSite`** — same-site deployments use `lax`/`strict`, cross-domain (e.g. Vercel + Render) use `none` + `secure: true`
 - O(1) session lookup via `sessionId` embedded in the refresh JWT
+- **Constant-time credentials check** — `argon2.verify` runs against a dummy hash for unknown emails / Google-only accounts so attackers can't enumerate users by response timing
+- **Generic `Invalid credentials` response** for every login failure mode (unknown email, wrong password, Google-only account) — no message-based enumeration
 
-### Account safety
-- Account lockout after **5 failed login attempts** (15-minute cooldown)
+### Two-factor authentication
+- Enable / disable / verify on login
+- **Pending setup staged in a separate table** — `/auth/2fa/generate` writes to `PendingTwoFactorSetup`, not to the user row. Abandoned setups never leave orphan secrets behind. 15-minute TTL.
+- **Disabling 2FA requires password re-auth** — a hijacked session + authenticator alone is not enough
+- TOTP secrets **encrypted at rest** (AES-256-GCM via `ENCRYPTION_KEY`); a DB dump no longer hands an attacker every user's seed
+- **Per-tempToken replay protection** — each 2FA pre-auth token carries a `jti`; the matching `TwoFactorAttempt` row is burned on first success or after 5 failed guesses, regardless of source IP
+- **Per-IP rate limit** of 5/min on `/auth/2fa/verify` on top of the per-token cap
+- 2FA pre-auth tokens cannot be used as access tokens (rejected by the JWT strategy)
+
+### Account safety & rate limiting
+- Account lockout after **5 failed login attempts** (15-minute cooldown) using Prisma's atomic `{ increment: 1 }` so concurrent requests can't undercount toward the threshold
+- Lockout state is **only revealed once the password is correct** — wrong-password attempts return the same generic error so attackers can't probe for the lock
 - Per-user **session cap of 10** — oldest session evicted on new login
-- Hourly **cleanup job** purges expired sessions and tokens
-- Per-endpoint rate limiting on auth flows
-- 2FA pre-auth tokens cannot be used as access tokens
+- Hourly **cleanup job** purges expired sessions, tokens, OAuth exchange codes, 2FA attempts, and pending 2FA setups
+- Per-endpoint rate limiting:
+  - `/auth/login` — 5 / 5 min per IP
+  - `/auth/forgot-password` — 3 / 15 min per IP
+  - `/auth/2fa/verify` — 5 / min per IP
+- `trust proxy` driven by `TRUST_PROXY` env so `req.ip` reflects the real client behind a reverse proxy (Vercel, Render, Cloudflare) — required for honest session IP tracking and per-IP throttling
+
+### Realtime authentication
+- Socket gateways (`/chat`, `/whiteboard`, `/shared-tasks`) verify the JWT at connect **and** drop the connection on every event once the access token's `exp` has passed (the client refreshes via `/auth/refresh` and reconnects)
 
 ### Workspace management
 - Freelancers create workspaces per client (name, description, color, status)
@@ -114,8 +133,23 @@ POSTGRES_URL=postgresql://user:password@localhost:5435/workspacebridge
 
 # JWT
 JWT_SECRET=your_jwt_secret
+JWT_REFRESH_SECRET=your_separate_refresh_secret  # optional but recommended — distinct from JWT_SECRET
 JWT_ACCESS_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=7d
+
+# AES-256-GCM key used to encrypt 2FA TOTP secrets at rest.
+# Generate with: openssl rand -base64 32
+ENCRYPTION_KEY=your_base64_encoded_32_byte_key
+
+# Cookie SameSite for the refresh cookie.
+# Same-site deployments (frontend + API share an eTLD+1): "lax" or "strict"
+# Cross-domain (Vercel + Render etc.): "none"  (forces secure:true)
+# Default: "none" in production, "lax" in development.
+COOKIE_SAMESITE=none
+
+# Reverse proxy hop count or CIDR. Required behind Vercel / Render / Cloudflare
+# so req.ip reflects the real client. Unset = no trust (safe dev default).
+TRUST_PROXY=1
 
 # Google OAuth
 GOOGLE_CLIENT_ID=your_google_client_id
@@ -176,13 +210,14 @@ npm run test:e2e   # end-to-end
 | POST | `/auth/logout` | Logout (clears the matching session only) |
 | POST | `/auth/refresh` | Rotate access + refresh tokens |
 | GET | `/auth/google` | Initiate Google OAuth |
-| GET | `/auth/google/callback` | Google OAuth callback |
+| GET | `/auth/google/callback` | Google OAuth callback — redirects with a short-lived `?code=` (single-use, 30s) |
+| POST | `/auth/exchange` | Exchange the OAuth `code` for `{ user, accessToken }` + refresh cookie |
 | GET | `/auth/verify-email` | Verify email via token |
 | POST | `/auth/forgot-password` | Send reset password email |
 | POST | `/auth/reset-password` | Reset password (invalidates all sessions) |
 | POST | `/auth/2fa/generate` | Generate TOTP secret + QR code |
 | POST | `/auth/2fa/enable` | Enable 2FA after scanning QR |
-| POST | `/auth/2fa/disable` | Disable 2FA |
+| POST | `/auth/2fa/disable` | Disable 2FA (requires password re-auth + TOTP code) |
 | POST | `/auth/2fa/verify` | Complete login with 2FA code |
 
 ### User (`/user`) — requires JWT
