@@ -71,6 +71,7 @@ export class AuthService {
   private static readonly MAX_FAILED_LOGIN_ATTEMPTS = 5;
   private static readonly LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
   private static readonly MAX_SESSIONS_PER_USER = 10;
+  private static readonly REFRESH_GRACE_PERIOD_MS = 30 * 1000; // 30 seconds
 
   private async enforceSessionLimit(userId: string) {
     const sessions = await this.prismaService.session.findMany({
@@ -531,12 +532,24 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token not found');
     }
 
-    // 3. verify the refresh token matches the stored hash
-    const isValid = await argon2.verify(session.refreshToken, refreshToken);
-    if (!isValid) {
-      // Token doesn't match — possible reuse of a rotated token. Revoke this session.
-      await this.prismaService.session.delete({ where: { id: session.id } });
-      throw new UnauthorizedException('Invalid refresh token');
+    // 3. verify the refresh token matches the stored hash (current or grace-period previous)
+    const matchesCurrent = await argon2.verify(session.refreshToken, refreshToken);
+    let isGraceHit = false;
+    if (!matchesCurrent) {
+      const withinGrace =
+        session.previousRefreshToken &&
+        session.tokenRotatedAt &&
+        Date.now() - session.tokenRotatedAt.getTime() < AuthService.REFRESH_GRACE_PERIOD_MS;
+      if (withinGrace) {
+        const matchesPrevious = await argon2.verify(session.previousRefreshToken!, refreshToken);
+        if (matchesPrevious) {
+          isGraceHit = true;
+        }
+      }
+      if (!isGraceHit) {
+        await this.prismaService.session.delete({ where: { id: session.id } });
+        throw new UnauthorizedException('Invalid refresh token');
+      }
     }
 
     // 4. check expiry
@@ -571,11 +584,13 @@ export class AuthService {
       expiresIn: this.refreshExpiresIn,
     });
 
-    // 6. rotate: update existing session in-place
+    // 6. rotate: update existing session in-place, keeping previous hash for grace window
     await this.prismaService.session.update({
       where: { id: session.id },
       data: {
+        previousRefreshToken: isGraceHit ? session.previousRefreshToken : session.refreshToken,
         refreshToken: await argon2.hash(newRefresh),
+        tokenRotatedAt: new Date(),
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       },
     });
