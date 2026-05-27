@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Request } from 'express';
 import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -34,6 +35,10 @@ class UpdateWorkspaceStatusDto {
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  private actorId(req: Request): string {
+    return (req.user as { id: string }).id;
+  }
+
   @Get('stats')
   @ApiOperation({ summary: 'Get platform stats (Admin only)' })
   @ApiResponse({ status: 200, description: 'Platform statistics' })
@@ -50,17 +55,6 @@ export class AdminController {
     return this.adminService.getUsers();
   }
 
-  @Patch('users/:id/role')
-  @ApiOperation({ summary: 'Update user role (Admin only)' })
-  @ApiResponse({ status: 200, description: 'Role updated successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  public async updateUserRole(
-    @Param('id') id: string,
-    @Body() dto: UpdateUserRoleDto,
-  ) {
-    return this.adminService.updateUserRole(id, dto.role);
-  }
-
   @Get('users/:id')
   @ApiOperation({ summary: 'Get user detail with workspaces, sessions, invites (Admin only)' })
   @ApiResponse({ status: 200, description: 'User detail' })
@@ -69,39 +63,52 @@ export class AdminController {
     return this.adminService.getUserDetail(id);
   }
 
+  @Patch('users/:id/role')
+  @ApiOperation({ summary: 'Update user role (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Role updated successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  public async updateUserRole(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserRoleDto,
+  ) {
+    return this.adminService.updateUserRole(id, dto.role, this.actorId(req));
+  }
+
   @Patch('users/:id/status')
   @ApiOperation({ summary: 'Suspend or activate user (Admin only)' })
   @ApiResponse({ status: 200, description: 'User status updated' })
   @ApiResponse({ status: 404, description: 'User not found' })
   public async updateUserStatus(
+    @Req() req: Request,
     @Param('id') id: string,
     @Body() dto: UpdateUserStatusDto,
   ) {
-    return this.adminService.updateUserStatus(id, dto.status);
+    return this.adminService.updateUserStatus(id, dto.status, this.actorId(req));
   }
 
   @Post('users/:id/reset-password')
   @ApiOperation({ summary: 'Send password reset email to user (Admin only)' })
   @ApiResponse({ status: 200, description: 'Password reset email sent' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  public async adminResetPassword(@Param('id') id: string) {
-    return this.adminService.adminResetPassword(id);
+  public async adminResetPassword(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.adminResetPassword(id, this.actorId(req));
   }
 
   @Post('users/:id/force-verify')
   @ApiOperation({ summary: 'Force verify user email (Admin only)' })
   @ApiResponse({ status: 200, description: 'User email verified' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  public async forceVerifyUser(@Param('id') id: string) {
-    return this.adminService.forceVerifyUser(id);
+  public async forceVerifyUser(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.forceVerifyUser(id, this.actorId(req));
   }
 
   @Delete('users/:id')
   @ApiOperation({ summary: 'Delete user (Admin only)' })
   @ApiResponse({ status: 200, description: 'User deleted successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  public async deleteUser(@Param('id') id: string) {
-    return this.adminService.deleteUser(id);
+  public async deleteUser(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.deleteUser(id, this.actorId(req));
   }
 
   @Get('workspaces')
@@ -117,18 +124,19 @@ export class AdminController {
   @ApiResponse({ status: 200, description: 'Status updated successfully' })
   @ApiResponse({ status: 404, description: 'Workspace not found' })
   public async updateWorkspaceStatus(
+    @Req() req: Request,
     @Param('id') id: string,
     @Body() dto: UpdateWorkspaceStatusDto,
   ) {
-    return this.adminService.updateWorkspaceStatus(id, dto.status);
+    return this.adminService.updateWorkspaceStatus(id, dto.status, this.actorId(req));
   }
 
   @Delete('workspaces/:id')
   @ApiOperation({ summary: 'Delete workspace (Admin only)' })
   @ApiResponse({ status: 200, description: 'Workspace deleted successfully' })
   @ApiResponse({ status: 404, description: 'Workspace not found' })
-  public async deleteWorkspace(@Param('id') id: string) {
-    return this.adminService.deleteWorkspace(id);
+  public async deleteWorkspace(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.deleteWorkspace(id, this.actorId(req));
   }
 
   @Get('invites')
@@ -143,8 +151,8 @@ export class AdminController {
   @ApiOperation({ summary: 'Revoke an invite (Admin only)' })
   @ApiResponse({ status: 200, description: 'Invite revoked successfully' })
   @ApiResponse({ status: 404, description: 'Invite not found' })
-  public async deleteInvite(@Param('id') id: string) {
-    return this.adminService.deleteInvite(id);
+  public async deleteInvite(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.deleteInvite(id, this.actorId(req));
   }
 
   @Get('sessions')
@@ -159,8 +167,8 @@ export class AdminController {
   @ApiOperation({ summary: 'Revoke a session / force logout (Admin only)' })
   @ApiResponse({ status: 200, description: 'Session revoked successfully' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  public async deleteSession(@Param('id') id: string) {
-    return this.adminService.deleteSession(id);
+  public async deleteSession(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.deleteSession(id, this.actorId(req));
   }
 
   @Get('files')
@@ -183,7 +191,15 @@ export class AdminController {
   @ApiOperation({ summary: 'Permanently delete a file (Admin only)' })
   @ApiResponse({ status: 200, description: 'File deleted successfully' })
   @ApiResponse({ status: 404, description: 'File not found' })
-  public async deleteFile(@Param('id') id: string) {
-    return this.adminService.deleteFile(id);
+  public async deleteFile(@Req() req: Request, @Param('id') id: string) {
+    return this.adminService.deleteFile(id, this.actorId(req));
+  }
+
+  @Get('audit-log')
+  @ApiOperation({ summary: 'Get audit log (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Audit log entries' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getAuditLog() {
+    return this.adminService.getAuditLog();
   }
 }

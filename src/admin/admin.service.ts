@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
+import { Prisma, UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
@@ -12,6 +12,18 @@ export class AdminService {
     private readonly mailService: MailService,
     private readonly storageService: StorageService,
   ) {}
+
+  private async audit(
+    actorId: string,
+    action: string,
+    targetType: string,
+    targetId: string,
+    metadata?: Prisma.InputJsonValue,
+  ) {
+    await this.prismaService.auditLog.create({
+      data: { actorId, action, targetType, targetId, metadata },
+    });
+  }
 
   public async getStats() {
     const now = new Date();
@@ -110,34 +122,55 @@ export class AdminService {
     });
   }
 
-  public async updateUserRole(id: string, role: UserRole) {
+  public async updateUserRole(id: string, role: UserRole, actorId: string) {
     const user = await this.prismaService.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
-    return this.prismaService.user.update({
+    const result = await this.prismaService.user.update({
       where: { id },
       data: { role },
       select: { id: true, email: true, role: true },
     });
+
+    await this.audit(actorId, 'user.role_change', 'user', id, {
+      email: user.email,
+      from: user.role,
+      to: role,
+    });
+
+    return result;
   }
 
-  public async deleteUser(id: string) {
+  public async deleteUser(id: string, actorId: string) {
     const user = await this.prismaService.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
     await this.prismaService.user.delete({ where: { id } });
+
+    await this.audit(actorId, 'user.delete', 'user', id, {
+      email: user.email,
+    });
+
     return { message: 'User deleted successfully' };
   }
 
-  public async updateUserStatus(id: string, status: UserStatus) {
+  public async updateUserStatus(id: string, status: UserStatus, actorId: string) {
     const user = await this.prismaService.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
-    return this.prismaService.user.update({
+    const result = await this.prismaService.user.update({
       where: { id },
       data: { status },
       select: { id: true, email: true, status: true },
     });
+
+    await this.audit(actorId, 'user.status_change', 'user', id, {
+      email: user.email,
+      from: user.status,
+      to: status,
+    });
+
+    return result;
   }
 
   public async getUserDetail(id: string) {
@@ -217,7 +250,7 @@ export class AdminService {
     return { ...user, invitesSent };
   }
 
-  public async adminResetPassword(id: string) {
+  public async adminResetPassword(id: string, actorId: string) {
     const user = await this.prismaService.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -237,18 +270,28 @@ export class AdminService {
 
     await this.mailService.sendPasswordResetEmail(user.email, token);
 
+    await this.audit(actorId, 'user.reset_password', 'user', id, {
+      email: user.email,
+    });
+
     return { message: 'Password reset email sent' };
   }
 
-  public async forceVerifyUser(id: string) {
+  public async forceVerifyUser(id: string, actorId: string) {
     const user = await this.prismaService.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
 
-    return this.prismaService.user.update({
+    const result = await this.prismaService.user.update({
       where: { id },
       data: { isVerified: true },
       select: { id: true, email: true, isVerified: true },
     });
+
+    await this.audit(actorId, 'user.force_verify', 'user', id, {
+      email: user.email,
+    });
+
+    return result;
   }
 
   public async getWorkspaces() {
@@ -276,22 +319,35 @@ export class AdminService {
     });
   }
 
-  public async updateWorkspaceStatus(id: string, status: WorkspaceStatus) {
+  public async updateWorkspaceStatus(id: string, status: WorkspaceStatus, actorId: string) {
     const workspace = await this.prismaService.workspace.findUnique({ where: { id } });
     if (!workspace) throw new NotFoundException('Workspace not found');
 
-    return this.prismaService.workspace.update({
+    const result = await this.prismaService.workspace.update({
       where: { id },
       data: { status },
       select: { id: true, name: true, status: true },
     });
+
+    await this.audit(actorId, 'workspace.status_change', 'workspace', id, {
+      name: workspace.name,
+      from: workspace.status,
+      to: status,
+    });
+
+    return result;
   }
 
-  public async deleteWorkspace(id: string) {
+  public async deleteWorkspace(id: string, actorId: string) {
     const workspace = await this.prismaService.workspace.findUnique({ where: { id } });
     if (!workspace) throw new NotFoundException('Workspace not found');
 
     await this.prismaService.workspace.delete({ where: { id } });
+
+    await this.audit(actorId, 'workspace.delete', 'workspace', id, {
+      name: workspace.name,
+    });
+
     return { message: 'Workspace deleted successfully' };
   }
 
@@ -317,11 +373,20 @@ export class AdminService {
     });
   }
 
-  public async deleteInvite(id: string) {
-    const invite = await this.prismaService.workspaceInvite.findUnique({ where: { id } });
+  public async deleteInvite(id: string, actorId: string) {
+    const invite = await this.prismaService.workspaceInvite.findUnique({
+      where: { id },
+      select: { id: true, email: true, workspaceId: true },
+    });
     if (!invite) throw new NotFoundException('Invite not found');
 
     await this.prismaService.workspaceInvite.delete({ where: { id } });
+
+    await this.audit(actorId, 'invite.revoke', 'invite', id, {
+      email: invite.email,
+      workspaceId: invite.workspaceId,
+    });
+
     return { message: 'Invite revoked successfully' };
   }
 
@@ -341,11 +406,19 @@ export class AdminService {
     });
   }
 
-  public async deleteSession(id: string) {
-    const session = await this.prismaService.session.findUnique({ where: { id } });
+  public async deleteSession(id: string, actorId: string) {
+    const session = await this.prismaService.session.findUnique({
+      where: { id },
+      select: { id: true, userId: true },
+    });
     if (!session) throw new NotFoundException('Session not found');
 
     await this.prismaService.session.delete({ where: { id } });
+
+    await this.audit(actorId, 'session.revoke', 'session', id, {
+      userId: session.userId,
+    });
+
     return { message: 'Session revoked successfully' };
   }
 
@@ -403,15 +476,28 @@ export class AdminService {
     };
   }
 
-  public async deleteFile(id: string) {
+  public async deleteFile(id: string, actorId: string) {
     const file = await this.prismaService.file.findUnique({
       where: { id },
-      select: { id: true, storageKey: true },
+      select: { id: true, name: true, storageKey: true, workspaceId: true },
     });
     if (!file) throw new NotFoundException('File not found');
 
     await this.storageService.delete(file.storageKey).catch(() => undefined);
     await this.prismaService.file.delete({ where: { id } });
+
+    await this.audit(actorId, 'file.delete', 'file', id, {
+      name: file.name,
+      workspaceId: file.workspaceId,
+    });
+
     return { message: 'File deleted successfully' };
+  }
+
+  public async getAuditLog() {
+    return this.prismaService.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
   }
 }
