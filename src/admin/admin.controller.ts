@@ -202,4 +202,24 @@ export class AdminController {
   public async getAuditLog() {
     return this.adminService.getAuditLog();
   }
+
+  @Get('settings')
+  @ApiOperation({ summary: 'Get all platform settings (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Platform settings' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getSettings() {
+    return this.adminService.getSettings();
+  }
+
+  @Patch('settings/:key')
+  @ApiOperation({ summary: 'Update a platform setting (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Setting updated' })
+  @ApiResponse({ status: 404, description: 'Setting not found' })
+  public async updateSetting(
+    @Req() req: Request,
+    @Param('key') key: string,
+    @Body('value') value: unknown,
+  ) {
+    return this.adminService.updateSetting(key, value, this.actorId(req));
+  }
 }

@@ -500,4 +500,28 @@ export class AdminService {
       take: 200,
     });
   }
+
+  public async getSettings() {
+    return this.prismaService.platformSetting.findMany({
+      orderBy: { key: 'asc' },
+    });
+  }
+
+  public async updateSetting(key: string, value: unknown, actorId: string) {
+    const setting = await this.prismaService.platformSetting.findUnique({ where: { key } });
+    if (!setting) throw new NotFoundException('Setting not found');
+
+    const result = await this.prismaService.platformSetting.update({
+      where: { key },
+      data: { value: value as never },
+    });
+
+    await this.audit(actorId, 'setting.update', 'setting', key, {
+      key,
+      from: String(setting.value),
+      to: String(value),
+    });
+
+    return result;
+  }
 }
