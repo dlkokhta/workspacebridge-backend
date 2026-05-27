@@ -6,6 +6,86 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AdminService {
   constructor(private readonly prismaService: PrismaService) {}
 
+  public async getStats() {
+    const now = new Date();
+
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(now.getDate() - 29);
+    thirtyDaysAgo.setHours(0, 0, 0, 0);
+
+    const [
+      totalUsers,
+      totalWorkspaces,
+      activeWorkspaces,
+      completedWorkspaces,
+      archivedWorkspaces,
+      usersThisWeek,
+      usersThisMonth,
+      recentUsers,
+      recentWorkspaces,
+    ] = await Promise.all([
+      this.prismaService.user.count(),
+      this.prismaService.workspace.count(),
+      this.prismaService.workspace.count({ where: { status: 'ACTIVE' } }),
+      this.prismaService.workspace.count({ where: { status: 'COMPLETED' } }),
+      this.prismaService.workspace.count({ where: { status: 'ARCHIVED' } }),
+      this.prismaService.user.count({ where: { createdAt: { gte: startOfWeek } } }),
+      this.prismaService.user.count({ where: { createdAt: { gte: startOfMonth } } }),
+      this.prismaService.user.groupBy({
+        by: ['createdAt'],
+        where: { createdAt: { gte: thirtyDaysAgo } },
+        _count: true,
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prismaService.workspace.groupBy({
+        by: ['createdAt'],
+        where: { createdAt: { gte: thirtyDaysAgo } },
+        _count: true,
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    const signupsByDay = this.aggregateByDay(recentUsers, thirtyDaysAgo, now);
+    const workspacesByDay = this.aggregateByDay(recentWorkspaces, thirtyDaysAgo, now);
+
+    return {
+      totalUsers,
+      totalWorkspaces,
+      activeWorkspaces,
+      completedWorkspaces,
+      archivedWorkspaces,
+      usersThisWeek,
+      usersThisMonth,
+      signupsByDay,
+      workspacesByDay,
+    };
+  }
+
+  private aggregateByDay(
+    rows: { createdAt: Date; _count: number }[],
+    from: Date,
+    to: Date,
+  ): { date: string; count: number }[] {
+    const map = new Map<string, number>();
+
+    for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+      map.set(d.toISOString().slice(0, 10), 0);
+    }
+
+    for (const row of rows) {
+      const key = row.createdAt.toISOString().slice(0, 10);
+      map.set(key, (map.get(key) ?? 0) + row._count);
+    }
+
+    return Array.from(map, ([date, count]) => ({ date, count }));
+  }
+
   public async getUsers() {
     return this.prismaService.user.findMany({
       select: {

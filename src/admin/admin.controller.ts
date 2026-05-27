@@ -22,6 +22,14 @@ class UpdateUserRoleDto {
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  @Get('stats')
+  @ApiOperation({ summary: 'Get platform stats (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Platform statistics' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Admin role required' })
+  public async getStats() {
+    return this.adminService.getStats();
+  }
+
   @Get('users')
   @ApiOperation({ summary: 'Get all users (Admin only)' })
   @ApiResponse({ status: 200, description: 'List of all users' })
