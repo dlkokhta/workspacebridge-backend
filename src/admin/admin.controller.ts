@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
 import { IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
@@ -61,6 +61,14 @@ export class AdminController {
     return this.adminService.updateUserRole(id, dto.role);
   }
 
+  @Get('users/:id')
+  @ApiOperation({ summary: 'Get user detail with workspaces, sessions, invites (Admin only)' })
+  @ApiResponse({ status: 200, description: 'User detail' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  public async getUserDetail(@Param('id') id: string) {
+    return this.adminService.getUserDetail(id);
+  }
+
   @Patch('users/:id/status')
   @ApiOperation({ summary: 'Suspend or activate user (Admin only)' })
   @ApiResponse({ status: 200, description: 'User status updated' })
@@ -70,6 +78,22 @@ export class AdminController {
     @Body() dto: UpdateUserStatusDto,
   ) {
     return this.adminService.updateUserStatus(id, dto.status);
+  }
+
+  @Post('users/:id/reset-password')
+  @ApiOperation({ summary: 'Send password reset email to user (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Password reset email sent' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  public async adminResetPassword(@Param('id') id: string) {
+    return this.adminService.adminResetPassword(id);
+  }
+
+  @Post('users/:id/force-verify')
+  @ApiOperation({ summary: 'Force verify user email (Admin only)' })
+  @ApiResponse({ status: 200, description: 'User email verified' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  public async forceVerifyUser(@Param('id') id: string) {
+    return this.adminService.forceVerifyUser(id);
   }
 
   @Delete('users/:id')

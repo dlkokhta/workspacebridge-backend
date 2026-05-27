@@ -1,10 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole, UserStatus, WorkspaceStatus } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AdminService {
-  constructor(private readonly prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly mailService: MailService,
+  ) {}
 
   public async getStats() {
     const now = new Date();
@@ -130,6 +135,117 @@ export class AdminService {
       where: { id },
       data: { status },
       select: { id: true, email: true, status: true },
+    });
+  }
+
+  public async getUserDetail(id: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        firstname: true,
+        lastname: true,
+        role: true,
+        status: true,
+        method: true,
+        isVerified: true,
+        isTwoFactorEnabled: true,
+        plan: true,
+        createdAt: true,
+        updatedAt: true,
+        ownedWorkspaces: {
+          select: {
+            id: true,
+            name: true,
+            color: true,
+            status: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+        workspaceMemberships: {
+          select: {
+            id: true,
+            role: true,
+            createdAt: true,
+            workspace: {
+              select: {
+                id: true,
+                name: true,
+                color: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+        Session: {
+          select: {
+            id: true,
+            ip: true,
+            userAgent: true,
+            createdAt: true,
+            expiresAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!user) throw new NotFoundException('User not found');
+
+    const invitesSent = await this.prismaService.workspaceInvite.findMany({
+      where: {
+        workspace: { ownerId: id },
+      },
+      select: {
+        id: true,
+        email: true,
+        createdAt: true,
+        expiresAt: true,
+        usedAt: true,
+        workspace: {
+          select: { id: true, name: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return { ...user, invitesSent };
+  }
+
+  public async adminResetPassword(id: string) {
+    const user = await this.prismaService.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    await this.prismaService.token.deleteMany({
+      where: { email: user.email, type: 'PASSWORD_RESET' },
+    });
+
+    const token = randomUUID();
+    await this.prismaService.token.create({
+      data: {
+        email: user.email,
+        token,
+        type: 'PASSWORD_RESET',
+        expiresIn: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    await this.mailService.sendPasswordResetEmail(user.email, token);
+
+    return { message: 'Password reset email sent' };
+  }
+
+  public async forceVerifyUser(id: string) {
+    const user = await this.prismaService.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+
+    return this.prismaService.user.update({
+      where: { id },
+      data: { isVerified: true },
+      select: { id: true, email: true, isVerified: true },
     });
   }
 
