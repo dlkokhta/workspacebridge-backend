@@ -653,14 +653,19 @@ export class AuthService {
   }
 
   async resetPassword(token: string, password: string) {
-    const record = await this.prismaService.token.findUnique({ where: { token } });
-
-    if (!record || record.type !== 'PASSWORD_RESET') {
+    // Atomic consume: delete returns the row if it existed, throws if not.
+    // Two concurrent requests race on this delete — exactly one wins.
+    let record: { email: string; expiresIn: Date };
+    try {
+      record = await this.prismaService.token.delete({
+        where: { token },
+        select: { email: true, expiresIn: true },
+      });
+    } catch {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    if (new Date() > record.expiresIn) {
-      await this.prismaService.token.delete({ where: { token } });
+    if (record.expiresIn < new Date()) {
       throw new BadRequestException(
         'Reset token has expired. Please request a new one.',
       );
@@ -668,20 +673,15 @@ export class AuthService {
 
     const hashedPassword = await argon2.hash(password);
 
-    await this.prismaService.user.update({
-      where: { email: record.email },
-      data: { password: hashedPassword },
-    });
-
-    // Invalidate all sessions for security after password change
-    const user = await this.prismaService.user.findUnique({
-      where: { email: record.email },
-    });
-    if (user) {
-      await this.prismaService.session.deleteMany({ where: { userId: user.id } });
-    }
-
-    await this.prismaService.token.delete({ where: { token } });
+    await this.prismaService.$transaction([
+      this.prismaService.user.update({
+        where: { email: record.email },
+        data: { password: hashedPassword },
+      }),
+      this.prismaService.session.deleteMany({
+        where: { user: { email: record.email } },
+      }),
+    ]);
 
     return {
       message: 'Password reset successfully. You can now log in with your new password.',
