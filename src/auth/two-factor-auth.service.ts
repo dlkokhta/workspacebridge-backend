@@ -15,6 +15,7 @@ import {
   decryptSecret,
   encryptSecret,
 } from '../libs/common/utils/secret-crypto';
+import { UserStatus } from '@prisma/client';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -209,7 +210,11 @@ export class TwoFactorAuthService {
       where: { id: payload.userId },
     });
 
-    if (!user?.isTwoFactorEnabled || !user?.twoFactorSecret) {
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is suspended');
+    }
+
+    if (!user.isTwoFactorEnabled || !user.twoFactorSecret) {
       throw new BadRequestException('2FA is not configured for this account');
     }
 

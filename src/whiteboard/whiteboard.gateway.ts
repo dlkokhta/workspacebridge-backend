@@ -12,7 +12,9 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { WhiteboardService } from './whiteboard.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { UserStatus } from '@prisma/client';
 import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { JoinBoardDto } from './dto/join-board.dto';
 import { SceneUpdateDto } from './dto/scene-update.dto';
@@ -52,9 +54,10 @@ export class WhiteboardGateway
     private readonly whiteboardService: WhiteboardService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly prismaService: PrismaService,
   ) {}
 
-  handleConnection(client: AuthenticatedSocket) {
+  async handleConnection(client: AuthenticatedSocket) {
     const token = client.handshake.auth?.token as string | undefined;
 
     if (!token) {
@@ -68,6 +71,15 @@ export class WhiteboardGateway
       });
 
       if (!payload.userId || payload.isTwoFactorAuthenticated === false) {
+        client.disconnect();
+        return;
+      }
+
+      const user = await this.prismaService.user.findUnique({
+        where: { id: payload.userId },
+        select: { status: true },
+      });
+      if (!user || user.status !== UserStatus.ACTIVE) {
         client.disconnect();
         return;
       }

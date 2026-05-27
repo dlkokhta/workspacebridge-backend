@@ -12,7 +12,9 @@ import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { MessageService } from './message.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { UserStatus } from '@prisma/client';
 import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
@@ -39,6 +41,7 @@ export class MessageGateway
     private readonly messageService: MessageService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly prismaService: PrismaService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -55,6 +58,15 @@ export class MessageGateway
       });
 
       if (!payload.userId || payload.isTwoFactorAuthenticated === false) {
+        client.disconnect();
+        return;
+      }
+
+      const user = await this.prismaService.user.findUnique({
+        where: { id: payload.userId },
+        select: { status: true },
+      });
+      if (!user || user.status !== UserStatus.ACTIVE) {
         client.disconnect();
         return;
       }

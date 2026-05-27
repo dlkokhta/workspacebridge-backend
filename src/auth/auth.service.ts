@@ -19,6 +19,7 @@ import { MailService } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import { GoogleUser } from './types/google-user.type';
+import { UserStatus } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
@@ -163,6 +164,10 @@ export class AuthService {
       throw new UnauthorizedException('User no longer exists');
     }
 
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is suspended');
+    }
+
     const sessionId = randomUUID();
     const accessPayload = {
       userId: user.id,
@@ -254,6 +259,10 @@ export class AuthService {
 
     if (!userExist) {
       throw new NotFoundException('User not found');
+    }
+
+    if (userExist.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is suspended');
     }
 
     const sessionId = randomUUID();
@@ -419,6 +428,10 @@ export class AuthService {
       throw new UnauthorizedException('Please verify your email address before logging in.');
     }
 
+    if (userExist.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is suspended');
+    }
+
     // Successful password check — reset lockout counters if needed
     if (userExist.failedLoginAttempts > 0 || userExist.lockedUntil) {
       await this.prismaService.user.update({
@@ -529,6 +542,16 @@ export class AuthService {
     // 4. check expiry
     if (new Date() > session.expiresAt) {
       throw new UnauthorizedException('Refresh token expired');
+    }
+
+    // 4b. reject suspended users
+    const user = await this.prismaService.user.findUnique({
+      where: { id: payload.userId },
+      select: { status: true },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      await this.prismaService.session.delete({ where: { id: session.id } });
+      throw new UnauthorizedException('Account is suspended');
     }
 
     // 5. generate new tokens (sessionId stays the same across rotations)

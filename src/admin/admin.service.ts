@@ -164,6 +164,10 @@ export class AdminService {
       select: { id: true, email: true, status: true },
     });
 
+    if (status === UserStatus.SUSPENDED) {
+      await this.prismaService.session.deleteMany({ where: { userId: id } });
+    }
+
     await this.audit(actorId, 'user.status_change', 'user', id, {
       email: user.email,
       from: user.status,

@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { UserStatus } from '@prisma/client';
 import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { JoinSharedTaskRoomDto } from './dto/join-shared-task-room.dto';
 
@@ -53,6 +54,15 @@ export class SharedTaskGateway
       });
 
       if (!payload.userId || payload.isTwoFactorAuthenticated === false) {
+        client.disconnect();
+        return;
+      }
+
+      const user = await this.prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { status: true },
+      });
+      if (!user || user.status !== UserStatus.ACTIVE) {
         client.disconnect();
         return;
       }

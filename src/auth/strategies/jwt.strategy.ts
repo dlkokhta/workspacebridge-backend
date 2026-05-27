@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { UserService } from 'src/user/user.service';
 import { JwtPayload } from '../types/jwt-payload.type';
+import { UserStatus } from '@prisma/client';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -35,7 +36,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('User not found');
     }
 
-    // 4. Return the user object (this will become req.user)
+    // 4. Reject suspended users
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException('Account is suspended');
+    }
+
+    // 5. Return the user object (this will become req.user)
     return user;
   }
 }
