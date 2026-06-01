@@ -19,6 +19,7 @@ import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
 import { LoadMoreMessagesDto } from './dto/load-more.dto';
+import { PresenceService } from '../presence/presence.service';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
@@ -42,6 +43,7 @@ export class MessageGateway
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly prismaService: PrismaService,
+    private readonly presenceService: PresenceService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -77,12 +79,18 @@ export class MessageGateway
       // expires — verifying the JWT only at connect time isn't enough
       // when the socket lives for hours.
       client.tokenExpiresAt = payload.exp;
+      // The frontend keeps a /chat socket open whenever the user is logged in,
+      // so this doubles as app-wide presence used by notifications.
+      this.presenceService.add(client.userId, client.id);
     } catch {
       client.disconnect();
     }
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
+    if (client.userId) {
+      this.presenceService.remove(client.userId, client.id);
+    }
     client.rooms.forEach((room) => client.leave(room));
   }
 

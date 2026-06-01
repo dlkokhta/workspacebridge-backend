@@ -4,10 +4,12 @@ import { ConfigService } from '@nestjs/config';
 import { MessageGateway } from './message.gateway';
 import { MessageService } from './message.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { PresenceModule } from '../presence/presence.module';
 
 @Module({
   imports: [
     PrismaModule,
+    PresenceModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
