@@ -41,7 +41,7 @@ export class FileService {
   async list(workspaceId: string, userId: string, _userRole: UserRole) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
 
-    return this.prisma.file.findMany({
+    const files = await this.prisma.file.findMany({
       where: { workspaceId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       select: {
@@ -54,8 +54,14 @@ export class FileService {
         uploadedBy: {
           select: { id: true, firstname: true, lastname: true, email: true },
         },
+        _count: { select: { comments: true } },
       },
     });
+
+    return files.map(({ _count, ...file }) => ({
+      ...file,
+      commentCount: _count.comments,
+    }));
   }
 
   async upload({ workspaceId, userId, file }: UploadParams) {
