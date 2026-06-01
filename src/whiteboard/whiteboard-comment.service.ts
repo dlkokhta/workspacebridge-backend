@@ -4,11 +4,13 @@ import {
   forwardRef,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhiteboardService } from './whiteboard.service';
 import { WhiteboardGateway } from './whiteboard.gateway';
+import { NotificationService } from '../notification/notification.service';
 import { CreateWhiteboardCommentDto } from './dto/create-whiteboard-comment.dto';
 
 const AUTHOR_SELECT = {
@@ -21,11 +23,14 @@ const AUTHOR_SELECT = {
 
 @Injectable()
 export class WhiteboardCommentService {
+  private readonly logger = new Logger(WhiteboardCommentService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly whiteboardService: WhiteboardService,
     @Inject(forwardRef(() => WhiteboardGateway))
     private readonly gateway: WhiteboardGateway,
+    private readonly notifications: NotificationService,
   ) {}
 
   async list(boardId: string, userId: string) {
@@ -63,6 +68,26 @@ export class WhiteboardCommentService {
       include: { author: { select: AUTHOR_SELECT } },
     });
     this.gateway.broadcastCommentCreated(boardId, created);
+
+    const commenterName =
+      `${created.author?.firstname ?? ''} ${created.author?.lastname ?? ''}`.trim() ||
+      (created.author?.email ?? 'Someone');
+
+    // Fire-and-forget: notification delivery must never block commenting.
+    void this.notifications
+      .notifyWhiteboardComment({
+        whiteboardId: boardId,
+        commenterId: userId,
+        commenterName,
+        body,
+      })
+      .catch((error: unknown) => {
+        this.logger.error(
+          'Failed to dispatch whiteboard comment notifications',
+          error instanceof Error ? error.stack : undefined,
+        );
+      });
+
     return created;
   }
 

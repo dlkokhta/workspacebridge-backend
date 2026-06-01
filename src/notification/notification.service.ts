@@ -129,6 +129,42 @@ export class NotificationService {
     });
   }
 
+  /**
+   * Notifies every workspace member except the commenter that a comment was
+   * left on a whiteboard — same in-app + offline-email behaviour as files.
+   */
+  async notifyWhiteboardComment(params: {
+    whiteboardId: string;
+    commenterId: string;
+    commenterName: string;
+    body: string;
+  }): Promise<void> {
+    const { whiteboardId, commenterId, commenterName, body } = params;
+
+    const board = await this.prisma.whiteboard.findUnique({
+      where: { id: whiteboardId },
+      select: { name: true, workspaceId: true },
+    });
+    if (!board) return;
+
+    const resolved = await this.resolveRecipients(
+      board.workspaceId,
+      commenterId,
+    );
+    if (!resolved || resolved.recipients.size === 0) return;
+
+    const preview = this.truncate(body, PREVIEW_MAX_LENGTH);
+    await this.dispatch({
+      workspaceId: board.workspaceId,
+      recipients: resolved.recipients,
+      type: NotificationType.WHITEBOARD_COMMENT,
+      data: { commenterId, commenterName, boardName: board.name, preview },
+      heading: `New comment on ${board.name}`,
+      body: `${commenterName}: ${preview}`,
+      ctaLabel: 'View comment',
+    });
+  }
+
   // Everyone in the workspace, deduped, minus the excluded user. The owner is
   // the managing freelancer; members carry their own role.
   private async resolveRecipients(

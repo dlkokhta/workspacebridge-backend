@@ -9,10 +9,12 @@ import { WhiteboardCommentService } from './whiteboard-comment.service';
 import { WhiteboardVersionService } from './whiteboard-version.service';
 import { WhiteboardGateway } from './whiteboard.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     PrismaModule,
+    NotificationModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
