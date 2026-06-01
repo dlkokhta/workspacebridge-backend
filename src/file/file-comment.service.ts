@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateFileCommentDto } from './dto/create-file-comment.dto';
 
 const AUTHOR_SELECT = {
@@ -17,7 +19,12 @@ const AUTHOR_SELECT = {
 
 @Injectable()
 export class FileCommentService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(FileCommentService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationService,
+  ) {}
 
   async list(fileId: string, userId: string) {
     await this.ensureFileAccess(fileId, userId);
@@ -37,10 +44,26 @@ export class FileCommentService {
       throw new BadRequestException('Comment body cannot be empty');
     }
 
-    return this.prisma.fileComment.create({
+    const created = await this.prisma.fileComment.create({
       data: { fileId, authorId: userId, body },
       include: { author: { select: AUTHOR_SELECT } },
     });
+
+    const commenterName =
+      `${created.author?.firstname ?? ''} ${created.author?.lastname ?? ''}`.trim() ||
+      (created.author?.email ?? 'Someone');
+
+    // Fire-and-forget: notification delivery must never block or fail commenting.
+    void this.notifications
+      .notifyFileComment({ fileId, commenterId: userId, commenterName, body })
+      .catch((error: unknown) => {
+        this.logger.error(
+          'Failed to dispatch file comment notifications',
+          error instanceof Error ? error.stack : undefined,
+        );
+      });
+
+    return created;
   }
 
   async delete(commentId: string, userId: string) {

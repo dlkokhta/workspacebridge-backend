@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { NotificationType, WorkspaceMemberRole } from '@prisma/client';
+import { NotificationType, Prisma, WorkspaceMemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceService } from '../presence/presence.service';
 import { MailService } from '../mail/mail.service';
@@ -68,8 +68,8 @@ export class NotificationService {
 
   /**
    * Notifies every workspace member except the sender that a new message
-   * arrived: an in-app notification row is always created, and members who are
-   * not currently connected also get an email so they don't miss it.
+   * arrived. An in-app notification is always created and pushed live; members
+   * who are offline also get an email so they don't miss it.
    */
   async notifyNewMessage(params: {
     workspaceId: string;
@@ -78,7 +78,66 @@ export class NotificationService {
     content: string;
   }): Promise<void> {
     const { workspaceId, senderId, senderName, content } = params;
+    const resolved = await this.resolveRecipients(workspaceId, senderId);
+    if (!resolved || resolved.recipients.size === 0) return;
 
+    const preview = this.truncate(content, PREVIEW_MAX_LENGTH);
+    await this.dispatch({
+      workspaceId,
+      recipients: resolved.recipients,
+      type: NotificationType.NEW_MESSAGE,
+      data: { senderId, senderName, preview },
+      heading: `New message in ${resolved.workspaceName}`,
+      body: `${senderName}: ${preview}`,
+      ctaLabel: 'View message',
+    });
+  }
+
+  /**
+   * Notifies every workspace member except the commenter that a comment was
+   * left on a file — same in-app + offline-email behaviour as messages.
+   */
+  async notifyFileComment(params: {
+    fileId: string;
+    commenterId: string;
+    commenterName: string;
+    body: string;
+  }): Promise<void> {
+    const { fileId, commenterId, commenterName, body } = params;
+
+    const file = await this.prisma.file.findUnique({
+      where: { id: fileId },
+      select: { name: true, workspaceId: true },
+    });
+    if (!file) return;
+
+    const resolved = await this.resolveRecipients(
+      file.workspaceId,
+      commenterId,
+    );
+    if (!resolved || resolved.recipients.size === 0) return;
+
+    const preview = this.truncate(body, PREVIEW_MAX_LENGTH);
+    await this.dispatch({
+      workspaceId: file.workspaceId,
+      recipients: resolved.recipients,
+      type: NotificationType.FILE_COMMENT,
+      data: { commenterId, commenterName, fileName: file.name, preview },
+      heading: `New comment on ${file.name}`,
+      body: `${commenterName}: ${preview}`,
+      ctaLabel: 'View comment',
+    });
+  }
+
+  // Everyone in the workspace, deduped, minus the excluded user. The owner is
+  // the managing freelancer; members carry their own role.
+  private async resolveRecipients(
+    workspaceId: string,
+    excludeUserId: string,
+  ): Promise<{
+    workspaceName: string;
+    recipients: Map<string, { email: string; role: WorkspaceMemberRole }>;
+  } | null> {
     const workspace = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: {
@@ -89,10 +148,8 @@ export class NotificationService {
         },
       },
     });
-    if (!workspace) return;
+    if (!workspace) return null;
 
-    // Everyone in the workspace, deduped, minus the sender. The owner is the
-    // managing freelancer; members carry their own role (freelancer or client).
     const recipients = new Map<
       string,
       { email: string; role: WorkspaceMemberRole }
@@ -107,21 +164,28 @@ export class NotificationService {
         role: member.role,
       });
     }
-    recipients.delete(senderId);
-    if (recipients.size === 0) return;
+    recipients.delete(excludeUserId);
 
-    const preview = this.truncate(content, PREVIEW_MAX_LENGTH);
-    const heading = `New message in ${workspace.name}`;
-    const body = `${senderName}: ${preview}`;
+    return { workspaceName: workspace.name, recipients };
+  }
+
+  // Creates a notification row per recipient, pushes it live, and emails anyone
+  // who is currently offline.
+  private async dispatch(params: {
+    workspaceId: string;
+    recipients: Map<string, { email: string; role: WorkspaceMemberRole }>;
+    type: NotificationType;
+    data: Prisma.InputJsonValue;
+    heading: string;
+    body: string;
+    ctaLabel: string;
+  }): Promise<void> {
+    const { workspaceId, recipients, type, data, heading, body, ctaLabel } =
+      params;
 
     for (const [userId, recipient] of recipients) {
       const created = await this.prisma.notification.create({
-        data: {
-          userId,
-          type: NotificationType.NEW_MESSAGE,
-          workspaceId,
-          data: { senderId, senderName, preview },
-        },
+        data: { userId, type, workspaceId, data },
         select: {
           id: true,
           type: true,
@@ -148,7 +212,7 @@ export class NotificationService {
           heading,
           body,
           path,
-          ctaLabel: 'View message',
+          ctaLabel,
         });
       } catch (error) {
         this.logger.error(

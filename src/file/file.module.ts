@@ -9,10 +9,12 @@ import { FileCleanupService } from './file-cleanup.service';
 import { StorageService } from './storage/storage.service';
 import { R2StorageService } from './storage/r2-storage.service';
 import { PrismaModule } from '../prisma/prisma.module';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     PrismaModule,
+    NotificationModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
