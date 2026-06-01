@@ -44,6 +44,7 @@ model User {
   addedSharedLinks     SharedLink[]        @relation("AddedSharedLinks")
   createdTasks         SharedTask[]        @relation("CreatedTasks")
   privateTasks         PrivateTask[]       @relation("PrivateTasks")
+  notifications        Notification[]      @relation("UserNotifications")
 
   @@map("users")
 }
@@ -162,14 +163,15 @@ model Workspace {
   ownerId String @map("owner_id")
   owner   User   @relation("OwnedWorkspaces", fields: [ownerId], references: [id])
 
-  members     WorkspaceMember[]
-  invites     WorkspaceInvite[]
-  messages    Message[]
-  whiteboards Whiteboard[]
-  files       File[]
-  sharedLinks SharedLink[]
-  sharedTasks SharedTask[]
-  privateTasks PrivateTask[]
+  members       WorkspaceMember[]
+  invites       WorkspaceInvite[]
+  messages      Message[]
+  whiteboards   Whiteboard[]
+  files         File[]
+  sharedLinks   SharedLink[]
+  sharedTasks   SharedTask[]
+  privateTasks  PrivateTask[]
+  notifications Notification[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -408,6 +410,26 @@ model PlatformSetting {
   @@map("platform_settings")
 }
 
+model Notification {
+  id   String           @id @default(uuid())
+  type NotificationType
+
+  userId String @map("user_id")
+  user   User   @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  data   Json?
+  isRead Boolean @default(false) @map("is_read")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
 enum WorkspaceStatus {
   ACTIVE
   COMPLETED
@@ -455,4 +477,11 @@ enum WhiteboardVersionType {
 enum TaskStatus {
   TODO
   DONE
+}
+
+enum NotificationType {
+  NEW_MESSAGE
+  FILE_COMMENT
+  TASK_ASSIGNED
+  WHITEBOARD_COMMENT
 }
