@@ -3,6 +3,7 @@ import { NotificationType, WorkspaceMemberRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { PresenceService } from '../presence/presence.service';
 import { MailService } from '../mail/mail.service';
+import { NotificationGateway } from './notification.gateway';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
 
 const DEFAULT_LIMIT = 20;
@@ -16,6 +17,7 @@ export class NotificationService {
     private readonly prisma: PrismaService,
     private readonly presence: PresenceService,
     private readonly mail: MailService,
+    private readonly gateway: NotificationGateway,
   ) {}
 
   async list(userId: string, query: ListNotificationsDto) {
@@ -113,14 +115,25 @@ export class NotificationService {
     const body = `${senderName}: ${preview}`;
 
     for (const [userId, recipient] of recipients) {
-      await this.prisma.notification.create({
+      const created = await this.prisma.notification.create({
         data: {
           userId,
           type: NotificationType.NEW_MESSAGE,
           workspaceId,
           data: { senderId, senderName, preview },
         },
+        select: {
+          id: true,
+          type: true,
+          data: true,
+          isRead: true,
+          createdAt: true,
+          workspace: { select: { id: true, name: true } },
+        },
       });
+
+      // Push live to any open tab/device; offline rooms are empty no-ops.
+      this.gateway.emitToUser(userId, created);
 
       // Online users will see it in-app via the bell; only email those away.
       if (this.presence.isOnline(userId)) continue;
