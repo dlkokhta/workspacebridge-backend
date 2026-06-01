@@ -5,11 +5,13 @@ import { MessageGateway } from './message.gateway';
 import { MessageService } from './message.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { PresenceModule } from '../presence/presence.module';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
     PrismaModule,
     PresenceModule,
+    NotificationModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

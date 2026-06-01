@@ -1,4 +1,4 @@
-import { UsePipes, ValidationPipe } from '@nestjs/common';
+import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -20,6 +20,7 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
 import { LoadMoreMessagesDto } from './dto/load-more.dto';
 import { PresenceService } from '../presence/presence.service';
+import { NotificationService } from '../notification/notification.service';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
@@ -38,12 +39,15 @@ export class MessageGateway
   @WebSocketServer()
   server: Server;
 
+  private readonly logger = new Logger(MessageGateway.name);
+
   constructor(
     private readonly messageService: MessageService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly prismaService: PrismaService,
     private readonly presenceService: PresenceService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -166,5 +170,26 @@ export class MessageGateway
     );
 
     this.server.to(workspaceId).emit('newMessage', message);
+
+    const senderName =
+      [message.sender.firstname, message.sender.lastname]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || message.sender.email;
+
+    // Fire-and-forget: notification delivery must never block or fail chat.
+    void this.notificationService
+      .notifyNewMessage({
+        workspaceId,
+        senderId: client.userId,
+        senderName,
+        content: trimmed,
+      })
+      .catch((error: unknown) => {
+        this.logger.error(
+          'Failed to dispatch message notifications',
+          error instanceof Error ? error.stack : undefined,
+        );
+      });
   }
 }
