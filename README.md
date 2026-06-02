@@ -131,6 +131,15 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 - Notification dispatch is **fire-and-forget** — a delivery failure never blocks or breaks the underlying action (sending a message, commenting)
 - Read endpoints: list (cursor-paginated), unread count, mark-one-read, mark-all-read
 
+### Global search
+- One search box across a workspace's whole history — **messages, files (and file comments), shared & private tasks, shared links, and whiteboard comments** — plus **workspaces themselves** by name/description
+- **PostgreSQL full-text search** (`websearch_to_tsquery` + `ts_rank` + `ts_headline`) backed by functional **GIN indexes** on every searched column, so search stays fast once a workspace has months of history
+- **Two scopes from one service**: **global** (every workspace the user owns or belongs to — answers "which client did I discuss X with?") and **scoped** (a single workspace, via `/workspace/:id/search`)
+- **Ranked, merged, highlighted** — sources are queried in parallel, merged by `ts_rank`, and each snippet returns the matched run wrapped in `U+0001`/`U+0002` sentinels for the client to render safely (no HTML injection)
+- **Substring matching** for filenames and workspace names — `accept.png` is a single full-text token, so `accept` is matched via escaped `ILIKE` instead
+- **Access-checked & role-aware** — owner/member check per workspace; **private tasks are owner-only and never surfaced to clients**; workspace name results are global-only
+- `websearch_to_tsquery` parses the query like a web search (quotes, `OR`, `-exclude`) and never throws on odd input; queries are validated (2–100 chars, optional type filter, `limit` 1–50)
+
 ## Getting Started
 
 ### Prerequisites
@@ -370,6 +379,15 @@ npm run test:e2e   # end-to-end
 | PATCH | `/notifications/:id/read` | Mark one notification as read |
 | PATCH | `/notifications/read-all` | Mark all my notifications as read |
 
+### Search (`/search`, `/workspace/:workspaceId/search`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/search` | Global search across every accessible workspace (`?q=` 2–100 chars, `?types=` CSV filter, `?limit=` 1–50) |
+| GET | `/workspace/:workspaceId/search` | Search within a single workspace (same query params) |
+
+Returns ranked results grouped by `type` — `workspace`, `message`, `file`, `file_comment`, `shared_task`, `private_task`, `shared_link`, `whiteboard_comment` — each with a highlighted snippet, the owning workspace, and author where applicable. `private_task` and `workspace` results are never returned to clients.
+
 ## Socket.IO
 
 Two namespaces, both authenticated via the JWT access token in the connection handshake (`auth.token`).
@@ -482,6 +500,7 @@ src/
 ├── shared-link/   # Workspace URL bookmarks (any-member add, creator-or-owner delete)
 ├── whiteboard/    # Boards, realtime sync, comments, version snapshots
 ├── notification/  # In-app + email notifications (REST + presence-aware dispatch + /notifications socket)
+├── search/        # Global & scoped full-text search across all workspace content
 ├── presence/      # In-memory online-user registry (drives live-push vs. email fallback)
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
