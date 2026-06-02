@@ -24,7 +24,7 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 | Framework | NestJS (Node.js) |
 | Language | TypeScript |
 | Database | PostgreSQL + Prisma ORM |
-| Realtime | Socket.IO (chat, whiteboard sync, presence) |
+| Realtime | Socket.IO (chat, whiteboard sync, presence, notifications) |
 | File storage | Cloudinary |
 | Auth | JWT (access + refresh), Google OAuth 2.0, TOTP 2FA |
 | Password hashing | Argon2 |
@@ -116,6 +116,20 @@ The backend API for **WorkspaceBridge**, a freelancer–client collaboration pla
 - **15 starter templates** — Blank, Brainstorm, Sticky notes, Mood board, Kanban, Timeline, 2×2 Matrix, Retro, Flowchart, User journey, Wireframe, System architecture, Database schema, API sequence, State machine
 - **Comments on shapes** — pin notes to any Excalidraw element, scoped per author, broadcast over socket
 - **Version history** — manual snapshots with optional labels, read-only preview, restore with automatic safety snapshot of the current state, live re-sync to all collaborators
+
+### File comments
+- Threaded comments on any workspace file (comment on a deliverable instead of losing feedback in chat)
+- Comment count surfaced directly on each file card
+- Author **or** workspace owner can delete; comments survive the author deleting their account (shown as "Deleted user") — same philosophy as the file itself
+- Comments are blocked on trashed files
+
+### Notifications
+- In-app notification center — bell with unread badge, delivered in **realtime** over Socket.IO (`/notifications` namespace)
+- Triggered by **new messages**, **file comments**, and **whiteboard comments**
+- Every recipient gets an in-app notification; recipients who are **offline** also get an email (Resend) so nothing is missed
+- **Presence-aware**: an in-memory registry of connected users decides live-push (online) vs. email fallback (offline)
+- Notification dispatch is **fire-and-forget** — a delivery failure never blocks or breaks the underlying action (sending a message, commenting)
+- Read endpoints: list (cursor-paginated), unread count, mark-one-read, mark-all-read
 
 ## Getting Started
 
@@ -302,6 +316,14 @@ npm run test:e2e   # end-to-end
 | POST | `/files/:id/restore` | Restore a soft-deleted file (quota re-checked) |
 | DELETE | `/files/:id/purge` | Permanently delete a trashed file from R2 + DB (uploader or workspace owner) |
 
+### File comments (`/files/:fileId/comments`, `/file-comments`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/files/:fileId/comments` | List comments on a file (oldest first, with author) |
+| POST | `/files/:fileId/comments` | Add a comment (`{ body }`, max 2000 chars) — notifies other members |
+| DELETE | `/file-comments/:id` | Delete a comment (author OR workspace owner) |
+
 ### Shared Links (`/links`, `/workspace/:workspaceId/links`) — requires JWT
 
 | Method | Endpoint | Description |
@@ -339,6 +361,15 @@ npm run test:e2e   # end-to-end
 | POST | `/whiteboards/:boardId/versions` | Save manual snapshot of current scene |
 | POST | `/whiteboards/:boardId/versions/:versionId/restore` | Restore version (auto-snapshots current state first) |
 
+### Notifications (`/notifications`) — requires JWT
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/notifications` | List my notifications (newest first; `?limit=` 1–50, `?cursor=`) |
+| GET | `/notifications/unread-count` | Unread count for the bell badge |
+| PATCH | `/notifications/:id/read` | Mark one notification as read |
+| PATCH | `/notifications/read-all` | Mark all my notifications as read |
+
 ## Socket.IO
 
 Two namespaces, both authenticated via the JWT access token in the connection handshake (`auth.token`).
@@ -365,6 +396,14 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `commentDeleted` | server → client | Comment deleted |
 | `boardRestored` | server → client | A version was restored — reload scene |
 
+### `/notifications`
+
+Push-only channel. The client opens it whenever the user is logged in and joins a room scoped to their own id, so the server can deliver to a specific user wherever they are in the app.
+
+| Event | Direction | Purpose |
+|---|---|---|
+| `notification` | server → client | A new notification for the connected user (bell refreshes its badge + list) |
+
 ## Database Models
 
 | Model | Description |
@@ -378,10 +417,12 @@ Two namespaces, both authenticated via the JWT access token in the connection ha
 | `WorkspaceInvite` | Invite tokens (email or shareable link, single-use) |
 | `Message` | Workspace chat messages |
 | `File` | Workspace file (R2 storage key + metadata, soft-delete via `deletedAt`) |
+| `FileComment` | Comment on a workspace file (author nullable — survives the author's account deletion) |
 | `SharedLink` | URL shared in a workspace (creator attribution, optional title) |
 | `Whiteboard` | Excalidraw board with scene JSON |
 | `WhiteboardComment` | Comment pinned to an Excalidraw element |
 | `WhiteboardVersion` | Snapshot of a board's scene (manual or auto on restore) |
+| `Notification` | In-app notification (type, source workspace, JSON payload, read state) |
 | `AuditLog` | Admin action audit trail (actor, action, target, metadata) |
 | `PlatformSetting` | Key-value platform configuration (invite expiry, file limits, feature flags) |
 
@@ -437,9 +478,11 @@ src/
 ├── workspace/     # Workspace CRUD
 ├── invite/        # Invite generation, email sending, accept flow
 ├── message/       # Workspace chat (REST history + Socket.IO gateway)
-├── file/          # Uploads, downloads, trash + restore + purge, R2 storage, daily cleanup cron
+├── file/          # Uploads, downloads, trash + restore + purge, comments, R2 storage, daily cleanup cron
 ├── shared-link/   # Workspace URL bookmarks (any-member add, creator-or-owner delete)
 ├── whiteboard/    # Boards, realtime sync, comments, version snapshots
+├── notification/  # In-app + email notifications (REST + presence-aware dispatch + /notifications socket)
+├── presence/      # In-memory online-user registry (drives live-push vs. email fallback)
 ├── mail/          # Resend email templates
 ├── prisma/        # PrismaService
 └── libs/          # Shared utilities and validators
