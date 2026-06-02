@@ -208,8 +208,8 @@ export class SearchService {
              ts_rank(to_tsvector('english', m.content), query) AS rank,
              m.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              NULL::text AS "parentId"
       FROM messages m
@@ -228,16 +228,25 @@ export class SearchService {
     workspaceIds: string[],
     limit: number,
   ): Promise<SearchResult[]> {
+    // Filenames tokenize as a single full-text lexeme ("accept.png" is one
+    // token), so word search alone can't find "accept". Users expect substring
+    // matching on filenames, so we also match (and rank-boost) a LIKE on the
+    // name. The pattern escapes LIKE wildcards so user input stays literal.
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
     const rows = await this.prisma.$queryRaw<RawSearchRow[]>(Prisma.sql`
       SELECT f.id::text AS id,
              f.workspace_id::text AS "workspaceId",
              f.name AS title,
              ts_headline('english', f.name, query, ${HEADLINE_OPTS}) AS snippet,
-             ts_rank(to_tsvector('english', f.name), query) AS rank,
+             GREATEST(
+               ts_rank(to_tsvector('english', f.name), query),
+               CASE WHEN f.name ILIKE ${like} THEN 0.1 ELSE 0 END
+             ) AS rank,
              f.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              NULL::text AS "parentId"
       FROM files f
@@ -245,7 +254,7 @@ export class SearchService {
            websearch_to_tsquery('english', ${q}) query
       WHERE f.workspace_id IN (${Prisma.join(workspaceIds)})
         AND f.deleted_at IS NULL
-        AND to_tsvector('english', f.name) @@ query
+        AND (to_tsvector('english', f.name) @@ query OR f.name ILIKE ${like})
       ORDER BY rank DESC, f.created_at DESC
       LIMIT ${limit}
     `);
@@ -265,8 +274,8 @@ export class SearchService {
              ts_rank(to_tsvector('english', fc.body), query) AS rank,
              fc.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              f.id::text AS "parentId"
       FROM file_comments fc
@@ -295,8 +304,8 @@ export class SearchService {
              ts_rank(to_tsvector('english', st.title), query) AS rank,
              st.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              NULL::text AS "parentId"
       FROM shared_tasks st
@@ -323,8 +332,8 @@ export class SearchService {
              ts_rank(to_tsvector('english', COALESCE(sl.title, '') || ' ' || sl.url), query) AS rank,
              sl.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              NULL::text AS "parentId"
       FROM shared_links sl
@@ -351,8 +360,8 @@ export class SearchService {
              ts_rank(to_tsvector('english', wc.body), query) AS rank,
              wc.created_at AS "createdAt",
              u.id::text AS "authorId",
-             u.firstname AS "authorFirstname",
-             u.lastname AS "authorLastname",
+             u.first_name AS "authorFirstname",
+             u.last_name AS "authorLastname",
              u.email AS "authorEmail",
              w.id::text AS "parentId"
       FROM whiteboard_comments wc
