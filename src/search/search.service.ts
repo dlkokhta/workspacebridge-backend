@@ -19,6 +19,7 @@ export const HL_END = String.fromCharCode(2); // U+0002 START OF TEXT
 const HEADLINE_OPTS = `StartSel=${HL_START},StopSel=${HL_END},MaxFragments=1,MaxWords=16,MinWords=5,ShortWord=2`;
 
 export type SearchResultType =
+  | 'workspace'
   | 'message'
   | 'file'
   | 'file_comment'
@@ -28,6 +29,7 @@ export type SearchResultType =
   | 'whiteboard_comment';
 
 export const SEARCH_RESULT_TYPES: SearchResultType[] = [
+  'workspace',
   'message',
   'file',
   'file_comment',
@@ -115,6 +117,11 @@ export class SearchService {
     const jobs: Promise<SearchResult[]>[] = [];
     const hasWorkspaces = workspaceIds.length > 0;
 
+    // Workspace name/description matches only make sense in global search —
+    // when already scoped to one workspace there is nothing to disambiguate.
+    if (!workspaceId && hasWorkspaces && wanted.has('workspace')) {
+      jobs.push(this.searchWorkspaces(q, workspaceIds, limit));
+    }
     if (hasWorkspaces && wanted.has('message')) {
       jobs.push(this.searchMessages(q, workspaceIds, limit));
     }
@@ -193,6 +200,37 @@ export class SearchService {
       },
       select: { id: true, name: true },
     });
+  }
+
+  private async searchWorkspaces(
+    q: string,
+    workspaceIds: string[],
+    limit: number,
+  ): Promise<SearchResult[]> {
+    // Workspace names are short labels, not prose, so (like filenames) users
+    // expect substring matching rather than full-text word matching. The
+    // workspaces table is tiny (one per client), so an ILIKE scan is cheap.
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+    const rows = await this.prisma.$queryRaw<RawSearchRow[]>(Prisma.sql`
+      SELECT w.id::text AS id,
+             w.id::text AS "workspaceId",
+             w.name AS title,
+             COALESCE(w.description, w.name) AS snippet,
+             0.15::float8 AS rank,
+             w.created_at AS "createdAt",
+             NULL::text AS "authorId",
+             NULL::text AS "authorFirstname",
+             NULL::text AS "authorLastname",
+             NULL::text AS "authorEmail",
+             NULL::text AS "parentId"
+      FROM workspaces w
+      WHERE w.id IN (${Prisma.join(workspaceIds)})
+        AND (w.name ILIKE ${like} OR w.description ILIKE ${like})
+      ORDER BY w.created_at DESC
+      LIMIT ${limit}
+    `);
+    return this.mapRows('workspace', rows);
   }
 
   private async searchMessages(

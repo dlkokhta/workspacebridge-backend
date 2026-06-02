@@ -177,7 +177,9 @@ describe('SearchService', () => {
         limit: 20,
       });
       expect(mockPrisma.workspace.findMany).toHaveBeenCalled();
-      expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(7);
+      // 7 workspace-scoped sources + the workspace name/description source,
+      // which only runs in global (unscoped) search.
+      expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(8);
     });
 
     it('returns no results and runs no source queries when the user has no workspaces', async () => {
