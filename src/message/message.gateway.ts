@@ -20,6 +20,7 @@ import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
 import { LoadMoreMessagesDto } from './dto/load-more.dto';
 import { TypingDto } from './dto/typing.dto';
+import { MarkReadDto } from './dto/mark-read.dto';
 import { PresenceService } from '../presence/presence.service';
 import { NotificationService } from '../notification/notification.service';
 
@@ -126,6 +127,14 @@ export class MessageGateway
 
     const history = await this.messageService.getMessages(workspaceId);
     client.emit('messageHistory', history);
+
+    // Send how far the other participants have read, so the sender can show
+    // "seen" on past messages immediately rather than waiting for a new event.
+    const readState = await this.messageService.getReadState(
+      workspaceId,
+      client.userId,
+    );
+    client.emit('readState', readState);
   }
 
   @SubscribeMessage('loadMoreMessages')
@@ -163,6 +172,25 @@ export class MessageGateway
       userId: client.userId,
       name: client.userName,
       isTyping: body.isTyping,
+    });
+  }
+
+  @SubscribeMessage('markRead')
+  async handleMarkRead(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: MarkReadDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    if (!client.rooms.has(body.workspaceId)) return;
+
+    const lastReadAt = await this.messageService.markRead(
+      body.workspaceId,
+      client.userId,
+    );
+    // Tell the other participants this user has caught up.
+    client.to(body.workspaceId).emit('readReceipt', {
+      userId: client.userId,
+      lastReadAt,
     });
   }
 

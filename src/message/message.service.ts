@@ -49,4 +49,29 @@ export class MessageService {
       hasMore: messages.length === limit,
     };
   }
+
+  /**
+   * Records that `userId` has read this workspace's chat up to now. Returns the
+   * timestamp so the gateway can broadcast it to the other participants.
+   */
+  async markRead(workspaceId: string, userId: string): Promise<Date> {
+    const lastReadAt = new Date();
+    await this.prisma.chatRead.upsert({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      create: { workspaceId, userId, lastReadAt },
+      update: { lastReadAt },
+    });
+    return lastReadAt;
+  }
+
+  /**
+   * Read positions of everyone in the workspace except the requester — sent on
+   * join so a sender immediately sees how far others have read their messages.
+   */
+  async getReadState(workspaceId: string, exceptUserId: string) {
+    return this.prisma.chatRead.findMany({
+      where: { workspaceId, userId: { not: exceptUserId } },
+      select: { userId: true, lastReadAt: true },
+    });
+  }
 }
