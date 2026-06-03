@@ -46,6 +46,7 @@ model User {
   privateTasks         PrivateTask[]       @relation("PrivateTasks")
   notifications        Notification[]      @relation("UserNotifications")
   fileComments         FileComment[]       @relation("FileComments")
+  chatReads            ChatRead[]          @relation("UserChatReads")
 
   @@map("users")
 }
@@ -173,11 +174,32 @@ model Workspace {
   sharedTasks   SharedTask[]
   privateTasks  PrivateTask[]
   notifications Notification[]
+  chatReads     ChatRead[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("workspaces")
+}
+
+/// Tracks how far each user has read a workspace's chat. A message is "seen"
+/// by a user when their `lastReadAt` is >= the message's `createdAt`. One row
+/// per (workspace, user) — covers the owner (not a WorkspaceMember) and every
+/// member alike.
+model ChatRead {
+  id String @id @default(uuid())
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id")
+  user   User   @relation("UserChatReads", fields: [userId], references: [id], onDelete: Cascade)
+
+  lastReadAt DateTime @map("last_read_at")
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@map("chat_reads")
 }
 
 model Message {
