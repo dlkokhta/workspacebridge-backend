@@ -19,12 +19,16 @@ import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { SendMessageDto } from './dto/send-message.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
 import { LoadMoreMessagesDto } from './dto/load-more.dto';
+import { TypingDto } from './dto/typing.dto';
 import { PresenceService } from '../presence/presence.service';
 import { NotificationService } from '../notification/notification.service';
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
   userEmail: string;
+  // Cached at connect so typing events (which fire on every keystroke) never
+  // hit the database to resolve a display name.
+  userName: string;
   tokenExpiresAt?: number;
 }
 
@@ -70,7 +74,7 @@ export class MessageGateway
 
       const user = await this.prismaService.user.findUnique({
         where: { id: payload.userId },
-        select: { status: true },
+        select: { status: true, firstname: true, lastname: true },
       });
       if (!user || user.status !== UserStatus.ACTIVE) {
         client.disconnect();
@@ -79,6 +83,9 @@ export class MessageGateway
 
       client.userId = payload.userId;
       client.userEmail = payload.email;
+      client.userName =
+        [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
+        payload.email;
       // Record exp so handlers can drop the socket once the access token
       // expires — verifying the JWT only at connect time isn't enough
       // when the socket lives for hours.
@@ -140,6 +147,23 @@ export class MessageGateway
 
     const older = await this.messageService.getMessages(workspaceId, 50, cursor);
     client.emit('olderMessages', older);
+  }
+
+  @SubscribeMessage('typing')
+  handleTyping(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: TypingDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    // Only relay typing within rooms the socket has actually joined (which
+    // already passed the membership check), so nobody can spam a workspace
+    // they don't belong to. Broadcast to everyone in the room except sender.
+    if (!client.rooms.has(body.workspaceId)) return;
+    client.to(body.workspaceId).emit('userTyping', {
+      userId: client.userId,
+      name: client.userName,
+      isTyping: body.isTyping,
+    });
   }
 
   @SubscribeMessage('sendMessage')
