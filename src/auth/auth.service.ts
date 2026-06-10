@@ -26,6 +26,7 @@ import {
 } from './auth.constants';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
+import { LoginAlertService } from './login-alert.service';
 
 @Injectable()
 export class AuthService {
@@ -59,6 +60,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly passwordBreachService: PasswordBreachService,
     private readonly passwordHistoryService: PasswordHistoryService,
+    private readonly loginAlertService: LoginAlertService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
     this.jwtRefreshSecret =
@@ -254,6 +256,13 @@ export class AuthService {
         userAgent,
         expiresAt: new Date(Date.now() + ttlMs),
       },
+    });
+
+    await this.loginAlertService.handleSuccessfulLogin('auth.google_login', {
+      userId: user.id,
+      email: user.email,
+      ip,
+      userAgent,
     });
 
     const { password: _password, ...userWithoutPassword } = user;
@@ -619,6 +628,16 @@ export class AuthService {
         userAgent,
         expiresAt: new Date(Date.now() + ttlMs),
       },
+    });
+
+    // New-device check + success audit. Runs after the session exists so a
+    // failure here can't block the login; the check itself reads only audit
+    // rows written by previous logins.
+    await this.loginAlertService.handleSuccessfulLogin('auth.login', {
+      userId: userExist.id,
+      email: userExist.email,
+      ip,
+      userAgent,
     });
 
     const { password, ...userWithoutPassword } = userExist;

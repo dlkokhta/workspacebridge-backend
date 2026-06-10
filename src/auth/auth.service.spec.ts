@@ -7,6 +7,7 @@ import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
+import { LoginAlertService } from './login-alert.service';
 import {
   BadRequestException,
   UnauthorizedException,
@@ -94,6 +95,10 @@ const mockPasswordHistoryService = {
   record: jest.fn(),
 };
 
+const mockLoginAlertService = {
+  handleSuccessfulLogin: jest.fn(),
+};
+
 const mockConfigService = {
   getOrThrow: jest.fn((key: string) => {
     const map: Record<string, string> = { JWT_SECRET: 'test-secret' };
@@ -126,6 +131,7 @@ describe('AuthService', () => {
           provide: PasswordHistoryService,
           useValue: mockPasswordHistoryService,
         },
+        { provide: LoginAlertService, useValue: mockLoginAlertService },
       ],
     }).compile();
 
@@ -463,6 +469,11 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('refreshToken', 'refresh-token');
       expect((result as { user: Record<string, unknown> }).user).not.toHaveProperty('password');
       expect(mockPrismaService.session.create).toHaveBeenCalled();
+      // completed login → new-device check + success audit
+      expect(mockLoginAlertService.handleSuccessfulLogin).toHaveBeenCalledWith(
+        'auth.login',
+        expect.objectContaining({ userId: 'user-123' }),
+      );
     });
 
     it('defaults to a 1-day session without rememberMe', async () => {
@@ -536,6 +547,9 @@ describe('AuthService', () => {
       expect(mockJwtService.sign.mock.calls[0][0]).toMatchObject({
         rememberMe: true,
       });
+      // the password step is not a completed login — no alert/audit yet;
+      // it fires after 2FA verification instead
+      expect(mockLoginAlertService.handleSuccessfulLogin).not.toHaveBeenCalled();
     });
   });
 

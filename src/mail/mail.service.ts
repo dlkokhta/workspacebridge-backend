@@ -358,6 +358,105 @@ export class MailService {
     });
   }
 
+  async sendNewDeviceAlertEmail(
+    email: string,
+    details: { device: string; ip: string; date: Date },
+  ) {
+    const from =
+      this.configService.get<string>('RESEND_FROM_EMAIL') ??
+      'noreply@example.com';
+
+    await this.resend.emails.send({
+      from,
+      to: email,
+      subject: 'New sign-in to your WorkspaceBridge account',
+      html: this.buildNewDeviceAlertEmail(details),
+    });
+  }
+
+  private buildNewDeviceAlertEmail(details: {
+    device: string;
+    ip: string;
+    date: Date;
+  }): string {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+    const resetUrl = `${frontendUrl}/passwordRecovery`;
+    // device/ip derive from request headers, so they are user-controlled.
+    const device = this.escapeHtml(details.device);
+    const ip = this.escapeHtml(details.ip);
+    const date = details.date.toUTCString();
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>New sign-in detected</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="520" cellpadding="0" cellspacing="0"
+          style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background:#5a8a6b;padding:32px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:0.5px;">
+                New sign-in detected
+              </h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:36px 40px;">
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                Your WorkspaceBridge account was just signed in to from a device
+                we haven't seen before:
+              </p>
+              <table cellpadding="0" cellspacing="0"
+                style="margin:0 0 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;width:100%;">
+                <tr>
+                  <td style="padding:16px 20px;color:#374151;font-size:14px;line-height:1.8;">
+                    <strong>Device:</strong> ${device}<br/>
+                    <strong>IP address:</strong> ${ip}<br/>
+                    <strong>Time:</strong> ${date}
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                If this was you, no action is needed. If you don't recognize this
+                sign-in, reset your password immediately — this will also sign
+                out all devices.
+              </p>
+              <div style="text-align:center;margin:32px 0;">
+                <a href="${resetUrl}"
+                  style="background:#5a8a6b;color:#ffffff;text-decoration:none;
+                         padding:14px 32px;border-radius:6px;font-size:15px;
+                         font-weight:600;display:inline-block;">
+                  Reset password
+                </a>
+              </div>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                You're receiving this security alert because of a sign-in to your
+                WorkspaceBridge account.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
   // Escapes dynamic text before it goes into the HTML template. Notification
   // headings/bodies can contain user-controlled content (message previews,
   // workspace names), so they must not be interpolated raw.

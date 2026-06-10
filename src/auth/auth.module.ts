@@ -13,6 +13,7 @@ import { MailModule } from '../mail/mail.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
+import { LoginAlertService } from './login-alert.service';
 
 @Module({
   controllers: [AuthController],
@@ -25,6 +26,7 @@ import { PasswordHistoryService } from '../libs/common/services/password-history
     GoogleStrategy,
     PasswordBreachService,
     PasswordHistoryService,
+    LoginAlertService,
   ],
   imports: [
     UserModule,

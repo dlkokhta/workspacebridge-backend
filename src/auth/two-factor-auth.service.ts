@@ -20,6 +20,7 @@ import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
 } from './auth.constants';
+import { LoginAlertService } from './login-alert.service';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -41,6 +42,7 @@ export class TwoFactorAuthService {
     private readonly prismaService: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly loginAlertService: LoginAlertService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
     this.jwtRefreshSecret =
@@ -291,6 +293,15 @@ export class TwoFactorAuthService {
         userAgent,
         expiresAt: new Date(Date.now() + ttlMs),
       },
+    });
+
+    // 2FA completion is the real end of a login — the password step never
+    // fires the alert, so it lands here exactly once per login.
+    await this.loginAlertService.handleSuccessfulLogin('auth.2fa_login', {
+      userId: user.id,
+      email: user.email,
+      ip,
+      userAgent,
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
