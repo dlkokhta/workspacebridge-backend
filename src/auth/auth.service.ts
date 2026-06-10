@@ -19,7 +19,7 @@ import { MailService } from '../mail/mail.service';
 import { randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import { GoogleUser } from './types/google-user.type';
-import { UserStatus } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
@@ -105,16 +105,18 @@ export class AuthService {
   // Using Prisma's `{ increment: 1 }` pushes the increment to SQL where
   // it's atomic; the returned row tells us the real post-increment count
   // and we apply the lock in a second update if needed.
-  private async registerFailedLogin(userId: string) {
+  private async registerFailedLogin(
+    userId: string,
+  ): Promise<{ attempts: number; locked: boolean }> {
     const updated = await this.prismaService.user.update({
       where: { id: userId },
       data: { failedLoginAttempts: { increment: 1 } },
       select: { failedLoginAttempts: true },
     });
 
-    if (
-      updated.failedLoginAttempts >= AuthService.MAX_FAILED_LOGIN_ATTEMPTS
-    ) {
+    const attempts = updated.failedLoginAttempts;
+    const locked = attempts >= AuthService.MAX_FAILED_LOGIN_ATTEMPTS;
+    if (locked) {
       await this.prismaService.user.update({
         where: { id: userId },
         data: {
@@ -124,6 +126,33 @@ export class AuthService {
         },
       });
     }
+    return { attempts, locked };
+  }
+
+  // Fire-and-forget audit write — an audit failure must never break the
+  // login path itself; it is logged server-side and dropped. ip/userAgent
+  // travel in metadata until the AuditLog model grows dedicated columns.
+  private auditAuthEvent(
+    action: string,
+    userId: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    // JSON round-trip strips undefined values, which Prisma's JSON input
+    // rejects (ip/userAgent are optional).
+    const cleanMetadata = JSON.parse(
+      JSON.stringify(metadata),
+    ) as Prisma.InputJsonValue;
+    void Promise.resolve(
+      this.prismaService.auditLog.create({
+        data: {
+          action,
+          targetType: 'user',
+          targetId: userId,
+          actorId: userId,
+          metadata: cleanMetadata,
+        },
+      }),
+    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
   }
 
   // ── OAuth exchange code (avoid token-in-URL after Google redirect) ────────
@@ -397,55 +426,80 @@ export class AuthService {
   async loginUser(loginUserDto: LoginUserDto, ip?: string, userAgent?: string) {
     const userExist = await this.userService.findByEmail(loginUserDto.email);
 
-    // Constant-time password check: always run argon2.verify so timing
-    // doesn't reveal whether the email is registered. Use the real hash if
-    // the account exists and is a CREDENTIALS account, otherwise verify
-    // against a dummy hash that always fails.
-    const isCredentialsAccount =
-      !!userExist && userExist.method === 'CREDENTIALS' && !!userExist.password;
-    const hashToCheck = isCredentialsAccount
-      ? userExist!.password!
-      : await this.getDummyHash();
-    const passwordMatches = await argon2.verify(
-      hashToCheck,
-      loginUserDto.password,
-    );
-
-    // Any of: unknown email, Google-only account, or wrong password → same
-    // generic response to prevent user enumeration. The real reason is
-    // logged server-side for debugging.
-    if (!userExist || !isCredentialsAccount || !passwordMatches) {
-      if (userExist && isCredentialsAccount && !passwordMatches) {
-        // Only count failed attempts for real password-method users.
-        await this.registerFailedLogin(userExist.id);
-      }
+    // Unknown email or Google-only account → verify against a dummy hash
+    // (burns the same argon2 CPU as a real check, so response timing doesn't
+    // reveal whether the email is registered), then the same generic 401 as
+    // a wrong password. The real reason is logged server-side for debugging.
+    if (
+      !userExist ||
+      userExist.method !== 'CREDENTIALS' ||
+      !userExist.password
+    ) {
+      await argon2.verify(await this.getDummyHash(), loginUserDto.password);
       this.logger.debug(
         `Login failed for ${loginUserDto.email}: ${
-          !userExist
-            ? 'no such user'
-            : !isCredentialsAccount
-              ? `wrong method (${userExist.method})`
-              : 'wrong password'
+          !userExist ? 'no such user' : `wrong method (${userExist.method})`
         }`,
       );
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Account lockout check (only meaningful once the password matched —
-    // exposing it earlier would also leak whether the email is registered).
+    // Lockout check BEFORE password verification — while locked, the
+    // password oracle must be closed entirely, otherwise an attacker can
+    // keep brute-forcing right through the lockout window. Only reachable
+    // for existing credentials accounts, and the lockout state is already
+    // observable by whoever caused it, so this adds no enumeration channel.
     if (userExist.lockedUntil && userExist.lockedUntil > new Date()) {
       const minutesLeft = Math.ceil(
         (userExist.lockedUntil.getTime() - Date.now()) / 60000,
       );
+      this.auditAuthEvent('auth.login_failed', userExist.id, {
+        email: userExist.email,
+        reason: 'account_locked',
+        ip,
+        userAgent,
+      });
       throw new UnauthorizedException(
-        `Account locked due to too many failed login attempts. Try again in ${minutesLeft} minute(s).`,
+        `Account is temporarily locked. Try again in ${minutesLeft} minute${minutesLeft === 1 ? '' : 's'}.`,
       );
     }
 
-    if (!userExist.isVerified) {
-      throw new UnauthorizedException('Please verify your email address before logging in.');
+    const passwordMatches = await argon2.verify(
+      userExist.password,
+      loginUserDto.password,
+    );
+
+    if (!passwordMatches) {
+      const { attempts, locked } = await this.registerFailedLogin(
+        userExist.id,
+      );
+      if (locked) {
+        this.auditAuthEvent('auth.account_locked', userExist.id, {
+          email: userExist.email,
+          attempts,
+          ip,
+          userAgent,
+        });
+        throw new UnauthorizedException(
+          'Too many failed attempts. Account is locked for 15 minutes.',
+        );
+      }
+      this.auditAuthEvent('auth.login_failed', userExist.id, {
+        email: userExist.email,
+        reason: 'wrong_password',
+        attempts,
+        ip,
+        userAgent,
+      });
+      this.logger.debug(`Login failed for ${loginUserDto.email}: wrong password`);
+      // No remaining-attempts countdown — it would only ever appear for
+      // existing accounts and would leak account existence.
+      throw new UnauthorizedException('Invalid credentials');
     }
 
+    // Suspended check only after a correct password, so probing random
+    // emails with wrong passwords can't discover which accounts exist but
+    // are suspended.
     if (userExist.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('Account is suspended');
     }
@@ -456,6 +510,10 @@ export class AuthService {
         where: { id: userExist.id },
         data: { failedLoginAttempts: 0, lockedUntil: null },
       });
+    }
+
+    if (!userExist.isVerified) {
+      throw new UnauthorizedException('Please verify your email address before logging in.');
     }
 
     const rememberMe = !!loginUserDto.rememberMe;

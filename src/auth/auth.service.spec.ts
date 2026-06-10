@@ -72,6 +72,9 @@ const mockPrismaService = {
   twoFactorAttempt: {
     create: jest.fn(),
   },
+  auditLog: {
+    create: jest.fn().mockResolvedValue({}),
+  },
   $transaction: jest.fn(),
 };
 
@@ -248,6 +251,113 @@ describe('AuthService', () => {
       await expect(
         service.loginUser({ email: 'john@example.com', password: 'wrong' }),
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects a locked account before verifying the password', async () => {
+      mockUserService.findByEmail.mockResolvedValue({
+        ...fakeUser,
+        lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+      });
+
+      await expect(
+        service.loginUser(
+          { email: 'john@example.com', password: 'correct' },
+          '1.2.3.4',
+          'Chrome',
+        ),
+      ).rejects.toThrow(/temporarily locked/);
+
+      // the password oracle must stay closed during the lockout window
+      expect(mockedVerify).not.toHaveBeenCalled();
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'auth.login_failed',
+          targetId: 'user-123',
+          metadata: expect.objectContaining({
+            reason: 'account_locked',
+            ip: '1.2.3.4',
+          }),
+        }),
+      });
+    });
+
+    it('verifies the password normally once the lock has expired', async () => {
+      mockUserService.findByEmail.mockResolvedValue({
+        ...fakeUser,
+        lockedUntil: new Date(Date.now() - 1000),
+        failedLoginAttempts: 5,
+      });
+      mockedVerify.mockResolvedValue(true);
+      mockedHash.mockResolvedValue('hashed-refresh' as never);
+      mockJwtService.sign
+        .mockReturnValueOnce('access-token')
+        .mockReturnValueOnce('refresh-token');
+      mockPrismaService.session.findMany.mockResolvedValue([]);
+      mockPrismaService.session.create.mockResolvedValue({});
+      mockPrismaService.user.update.mockResolvedValue({});
+
+      const result = await service.loginUser({
+        email: 'john@example.com',
+        password: 'correct',
+      });
+
+      expect(mockedVerify).toHaveBeenCalled();
+      expect(result).toHaveProperty('accessToken', 'access-token');
+      // stale counters reset after the successful login
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-123' },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
+    });
+
+    it('locks the account and says so on the 5th failed attempt', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(false);
+      mockPrismaService.user.update
+        .mockResolvedValueOnce({ failedLoginAttempts: 5 })
+        .mockResolvedValueOnce({});
+
+      await expect(
+        service.loginUser({ email: 'john@example.com', password: 'wrong' }),
+      ).rejects.toThrow(
+        new UnauthorizedException(
+          'Too many failed attempts. Account is locked for 15 minutes.',
+        ),
+      );
+
+      // second update applies the lock
+      expect(mockPrismaService.user.update).toHaveBeenCalledTimes(2);
+      expect(
+        mockPrismaService.user.update.mock.calls[1][0].data.lockedUntil,
+      ).toBeInstanceOf(Date);
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'auth.account_locked',
+          metadata: expect.objectContaining({ attempts: 5 }),
+        }),
+      });
+    });
+
+    it('audits below-threshold failures and stays generic', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(false);
+      mockPrismaService.user.update.mockResolvedValue({
+        failedLoginAttempts: 2,
+      });
+
+      await expect(
+        service.loginUser({ email: 'john@example.com', password: 'wrong' }),
+      ).rejects.toThrow(new UnauthorizedException('Invalid credentials'));
+
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'auth.login_failed',
+          metadata: expect.objectContaining({
+            reason: 'wrong_password',
+            attempts: 2,
+          }),
+        }),
+      });
     });
 
     it('throws UnauthorizedException when email is not verified', async () => {
