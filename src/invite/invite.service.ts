@@ -13,6 +13,7 @@ import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
 import { SendInviteDto } from './dto/send-invite.dto';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 
 @Injectable()
 export class InviteService {
@@ -25,6 +26,7 @@ export class InviteService {
     private readonly mailService: MailService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly passwordBreachService: PasswordBreachService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
     this.accessExpiresIn =
@@ -107,6 +109,15 @@ export class InviteService {
 
     const existing = await this.prisma.user.findUnique({ where: { email: resolvedEmail } });
     if (existing) throw new BadRequestException('An account with this email already exists. Please log in instead.');
+
+    // Invite acceptance is the client-side registration path, so it gets the
+    // same HIBP breach check as /auth/signup. The invite stays unused on
+    // rejection (usedAt is only set further down), so the client can retry.
+    if (await this.passwordBreachService.isBreached(dto.password)) {
+      throw new BadRequestException(
+        'This password has appeared in a known data breach. Please choose a different one.',
+      );
+    }
 
     const hashedPassword = await argon2.hash(dto.password);
 

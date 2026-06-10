@@ -106,6 +106,21 @@ describe('AuthController (e2e)', () => {
       });
     });
 
+    it('returns 400 with a clear error when the password is known-breached', async () => {
+      mockAuthService.registerUser.mockRejectedValue(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/signup')
+        .send(VALID_SIGNUP)
+        .expect(400);
+
+      expect(res.body.message).toContain('known data breach');
+    });
+
     it('returns 200 and a success message on valid registration', async () => {
       mockAuthService.registerUser.mockResolvedValue({
         message:
@@ -414,6 +429,25 @@ describe('AuthController (e2e)', () => {
         .post('/auth/reset-password')
         .send({ token: 'bad-token', password: 'NewPass1!', passwordRepeat: 'NewPass1!' })
         .expect(400);
+    });
+
+    it('returns 400 with a clear error when the new password is known-breached', async () => {
+      mockAuthService.resetPassword.mockRejectedValue(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({
+          token: 'valid-token',
+          password: 'Password1!',
+          passwordRepeat: 'Password1!',
+        })
+        .expect(400);
+
+      expect(res.body.message).toContain('known data breach');
     });
 
     it('returns 200 on successful password reset', async () => {

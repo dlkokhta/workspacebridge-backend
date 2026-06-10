@@ -11,6 +11,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { GoogleStrategy } from './strategies/google.strategy';
 import { MailModule } from '../mail/mail.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 
 @Module({
   controllers: [AuthController],
@@ -21,6 +22,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     PrismaService,
     JwtStrategy,
     GoogleStrategy,
+    PasswordBreachService,
   ],
   imports: [
     UserModule,

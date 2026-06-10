@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import {
   BadRequestException,
   UnauthorizedException,
@@ -83,6 +84,10 @@ const mockMailService = {
   sendAccountExistsEmail: jest.fn().mockResolvedValue(undefined),
 };
 
+const mockPasswordBreachService = {
+  isBreached: jest.fn().mockResolvedValue(false),
+};
+
 const mockConfigService = {
   getOrThrow: jest.fn((key: string) => {
     const map: Record<string, string> = { JWT_SECRET: 'test-secret' };
@@ -110,6 +115,7 @@ describe('AuthService', () => {
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: MailService, useValue: mockMailService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: PasswordBreachService, useValue: mockPasswordBreachService },
       ],
     }).compile();
 
@@ -150,6 +156,26 @@ describe('AuthService', () => {
           targetId: fakeUser.id,
         }),
       });
+    });
+
+    it('rejects a breached password before the duplicate-email lookup', async () => {
+      mockPasswordBreachService.isBreached.mockResolvedValueOnce(true);
+
+      await expect(service.registerUser(SIGNUP_DTO)).rejects.toThrow(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      expect(mockPasswordBreachService.isBreached).toHaveBeenCalledWith(
+        SIGNUP_DTO.password,
+      );
+      // The check runs first so the 400 is identical whether or not the
+      // email is registered — no enumeration channel via breached passwords.
+      expect(mockUserService.findByEmail).not.toHaveBeenCalled();
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
+      expect(mockMailService.sendAccountExistsEmail).not.toHaveBeenCalled();
     });
 
     it('does not fail the duplicate path when the email send fails', async () => {
@@ -695,6 +721,23 @@ describe('AuthService', () => {
   // ─── resetPassword ──────────────────────────────────────────────────────────
 
   describe('resetPassword', () => {
+    it('rejects a breached password without consuming the reset token', async () => {
+      mockPasswordBreachService.isBreached.mockResolvedValueOnce(true);
+
+      await expect(
+        service.resetPassword('valid-token', 'breached-pass'),
+      ).rejects.toThrow(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      // The single-use token must survive so the user can retry with a
+      // stronger password from the same reset link.
+      expect(mockPrismaService.token.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when token is not found', async () => {
       mockPrismaService.token.delete.mockRejectedValue(new Error('not found'));
 

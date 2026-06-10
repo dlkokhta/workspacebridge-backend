@@ -7,6 +7,7 @@ import { hash, verify } from 'argon2';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 
 @Injectable()
 export class UserService {
@@ -18,6 +19,7 @@ export class UserService {
     private readonly prismaService: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly passwordBreachService: PasswordBreachService,
   ) {
     this.jwtRefreshSecret =
       this.configService.get<string>('JWT_REFRESH_SECRET') ??
@@ -84,6 +86,13 @@ export class UserService {
     const isValid = await verify(user.password, dto.currentPassword);
     if (!isValid) {
       throw new BadRequestException('Current password is incorrect');
+    }
+    // HIBP k-anonymity breach check; fails open on an HIBP outage so it
+    // never blocks a legitimate password change.
+    if (await this.passwordBreachService.isBreached(dto.newPassword)) {
+      throw new BadRequestException(
+        'This password has appeared in a known data breach. Please choose a different one.',
+      );
     }
     const hashed = await hash(dto.newPassword);
     await this.prismaService.user.update({

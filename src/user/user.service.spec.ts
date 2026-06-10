@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { UserService } from './user.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
@@ -47,6 +48,10 @@ const mockConfigService = {
   getOrThrow: jest.fn().mockReturnValue('test-jwt-secret'),
 };
 
+const mockPasswordBreachService = {
+  isBreached: jest.fn().mockResolvedValue(false),
+};
+
 describe('UserService', () => {
   let service: UserService;
 
@@ -57,6 +62,7 @@ describe('UserService', () => {
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: PasswordBreachService, useValue: mockPasswordBreachService },
       ],
     }).compile();
 
@@ -250,6 +256,29 @@ describe('UserService', () => {
       await expect(service.changePassword('user-123', dto)).rejects.toThrow(
         new BadRequestException('Current password is incorrect'),
       );
+      // No HIBP traffic for unauthenticated guesses — the breach check only
+      // runs once the current password has been verified.
+      expect(mockPasswordBreachService.isBreached).not.toHaveBeenCalled();
+    });
+
+    it('rejects a breached new password without saving it', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(true);
+      mockPasswordBreachService.isBreached.mockResolvedValueOnce(true);
+
+      const dto = { currentPassword: 'correct-password', newPassword: 'breached-pass' };
+
+      await expect(service.changePassword('user-123', dto)).rejects.toThrow(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      expect(mockPasswordBreachService.isBreached).toHaveBeenCalledWith(
+        'breached-pass',
+      );
+      expect(mockedHash).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
     it('hashes and saves the new password on success', async () => {

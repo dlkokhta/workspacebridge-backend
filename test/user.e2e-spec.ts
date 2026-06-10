@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ExecutionContext,
   INestApplication,
   NotFoundException,
@@ -79,6 +80,42 @@ describe('UserController (e2e)', () => {
   });
 
   // ─── GET /user/sessions ──────────────────────────────────────────────────────
+
+  describe('PATCH /user/me/password', () => {
+    const VALID_CHANGE = {
+      currentPassword: 'OldPass1!',
+      newPassword: 'NewPass1!',
+    };
+
+    it('changes the password and returns 200', async () => {
+      mockUserService.changePassword.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .patch('/user/me/password')
+        .send(VALID_CHANGE)
+        .expect(200);
+
+      expect(mockUserService.changePassword).toHaveBeenCalledWith(
+        'user-123',
+        VALID_CHANGE,
+      );
+    });
+
+    it('returns 400 with a clear error when the new password is known-breached', async () => {
+      mockUserService.changePassword.mockRejectedValue(
+        new BadRequestException(
+          'This password has appeared in a known data breach. Please choose a different one.',
+        ),
+      );
+
+      const res = await request(app.getHttpServer())
+        .patch('/user/me/password')
+        .send(VALID_CHANGE)
+        .expect(400);
+
+      expect(res.body.message).toContain('known data breach');
+    });
+  });
 
   describe('GET /user/sessions', () => {
     it('returns the session list and forwards the refresh cookie', async () => {

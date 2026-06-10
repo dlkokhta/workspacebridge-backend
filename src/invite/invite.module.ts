@@ -4,10 +4,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { InviteService } from './invite.service';
 import { InviteController } from './invite.controller';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 
 @Module({
   imports: [JwtModule.register({})],
-  providers: [PrismaService, MailService, InviteService],
+  providers: [PrismaService, MailService, InviteService, PasswordBreachService],
   controllers: [InviteController],
 })
 export class InviteModule {}

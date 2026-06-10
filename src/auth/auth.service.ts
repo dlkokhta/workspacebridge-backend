@@ -24,6 +24,7 @@ import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
 } from './auth.constants';
+import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 
 @Injectable()
 export class AuthService {
@@ -55,6 +56,7 @@ export class AuthService {
     private readonly prismaService: PrismaService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
+    private readonly passwordBreachService: PasswordBreachService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
     this.jwtRefreshSecret =
@@ -73,6 +75,16 @@ export class AuthService {
   // otherwise (the old fixed JWT_REFRESH_EXPIRES_IN=7d is no longer used).
   private sessionTtlMs(rememberMe?: boolean): number {
     return rememberMe ? REMEMBER_ME_TTL_MS : DEFAULT_SESSION_TTL_MS;
+  }
+
+  // Fails open inside PasswordBreachService — an HIBP outage never blocks a
+  // legitimate signup or reset, it only skips the check.
+  private async assertPasswordNotBreached(password: string): Promise<void> {
+    if (await this.passwordBreachService.isBreached(password)) {
+      throw new BadRequestException(
+        'This password has appeared in a known data breach. Please choose a different one.',
+      );
+    }
   }
 
   private static readonly MAX_FAILED_LOGIN_ATTEMPTS = 5;
@@ -413,6 +425,13 @@ export class AuthService {
     'Registration successful! Please check your email to verify your account.';
 
   async registerUser(createUserDto: CreateUserDto) {
+    // Breach check BEFORE the duplicate-email lookup (the reference checks
+    // after). If it ran only on the fresh-signup path, a breached password
+    // would 400 for new emails but "succeed" for registered ones — an
+    // enumeration channel that would undo the anti-enumeration work below.
+    // Checked first, the response is identical either way.
+    await this.assertPasswordNotBreached(createUserDto.password);
+
     const userExist = await this.userService.findByEmail(createUserDto.email);
 
     if (userExist) {
@@ -762,6 +781,11 @@ export class AuthService {
   }
 
   async resetPassword(token: string, password: string) {
+    // Breach check BEFORE the atomic token consume below — a breached
+    // password must not burn the single-use token, so the user can retry
+    // with a stronger one from the same reset link.
+    await this.assertPasswordNotBreached(password);
+
     // Atomic consume: delete returns the row if it existed, throws if not.
     // Two concurrent requests race on this delete — exactly one wins.
     let record: { email: string; expiresIn: Date };
