@@ -8,6 +8,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
+import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 
 @Injectable()
 export class UserService {
@@ -20,6 +21,7 @@ export class UserService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly passwordBreachService: PasswordBreachService,
+    private readonly passwordHistoryService: PasswordHistoryService,
   ) {
     this.jwtRefreshSecret =
       this.configService.get<string>('JWT_REFRESH_SECRET') ??
@@ -94,7 +96,14 @@ export class UserService {
         'This password has appeared in a known data breach. Please choose a different one.',
       );
     }
+    // Reject reuse of the current or any of the last 5 passwords.
+    await this.passwordHistoryService.assertNotReused(
+      id,
+      dto.newPassword,
+      user.password,
+    );
     const hashed = await hash(dto.newPassword);
+    await this.passwordHistoryService.record(id, user.password);
     await this.prismaService.user.update({
       where: { id },
       data: { password: hashed },

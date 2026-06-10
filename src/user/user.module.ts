@@ -5,6 +5,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
+import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 
 @Module({
   imports: [
@@ -19,7 +20,12 @@ import { PasswordBreachService } from '../libs/common/services/password-breach.s
     }),
   ],
   controllers: [UserController],
-  providers: [PrismaService, UserService, PasswordBreachService],
+  providers: [
+    PrismaService,
+    UserService,
+    PasswordBreachService,
+    PasswordHistoryService,
+  ],
   exports: [UserService],
 })
 export class UserModule {}

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { UserService } from './user.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
+import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
@@ -52,6 +53,11 @@ const mockPasswordBreachService = {
   isBreached: jest.fn().mockResolvedValue(false),
 };
 
+const mockPasswordHistoryService = {
+  assertNotReused: jest.fn(),
+  record: jest.fn(),
+};
+
 describe('UserService', () => {
   let service: UserService;
 
@@ -63,6 +69,10 @@ describe('UserService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: PasswordBreachService, useValue: mockPasswordBreachService },
+        {
+          provide: PasswordHistoryService,
+          useValue: mockPasswordHistoryService,
+        },
       ],
     }).compile();
 
@@ -281,6 +291,30 @@ describe('UserService', () => {
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
+    it('rejects a reused password without saving it', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(true);
+      mockPasswordHistoryService.assertNotReused.mockRejectedValueOnce(
+        new BadRequestException(
+          "You can't reuse a recent password. Please choose a different one.",
+        ),
+      );
+
+      const dto = { currentPassword: 'correct-password', newPassword: 'reused-pass' };
+
+      await expect(service.changePassword('user-123', dto)).rejects.toThrow(
+        /reuse a recent password/,
+      );
+
+      expect(mockPasswordHistoryService.assertNotReused).toHaveBeenCalledWith(
+        'user-123',
+        'reused-pass',
+        fakeUser.password,
+      );
+      expect(mockedHash).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
     it('hashes and saves the new password on success', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
       mockedVerify.mockResolvedValue(true);
@@ -291,6 +325,11 @@ describe('UserService', () => {
       await service.changePassword('user-123', dto);
 
       expect(mockedHash).toHaveBeenCalledWith('newPass123');
+      // the replaced hash lands in the password history
+      expect(mockPasswordHistoryService.record).toHaveBeenCalledWith(
+        'user-123',
+        fakeUser.password,
+      );
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: 'user-123' },
         data: { password: 'new-hashed-pw' },

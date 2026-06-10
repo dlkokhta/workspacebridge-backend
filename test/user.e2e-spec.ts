@@ -115,6 +115,21 @@ describe('UserController (e2e)', () => {
 
       expect(res.body.message).toContain('known data breach');
     });
+
+    it('returns 400 with a clear error when the new password was recently used', async () => {
+      mockUserService.changePassword.mockRejectedValue(
+        new BadRequestException(
+          "You can't reuse a recent password. Please choose a different one.",
+        ),
+      );
+
+      const res = await request(app.getHttpServer())
+        .patch('/user/me/password')
+        .send(VALID_CHANGE)
+        .expect(400);
+
+      expect(res.body.message).toContain('reuse a recent password');
+    });
   });
 
   describe('GET /user/sessions', () => {

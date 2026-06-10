@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
+import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 import {
   BadRequestException,
   UnauthorizedException,
@@ -88,6 +89,11 @@ const mockPasswordBreachService = {
   isBreached: jest.fn().mockResolvedValue(false),
 };
 
+const mockPasswordHistoryService = {
+  assertNotReused: jest.fn(),
+  record: jest.fn(),
+};
+
 const mockConfigService = {
   getOrThrow: jest.fn((key: string) => {
     const map: Record<string, string> = { JWT_SECRET: 'test-secret' };
@@ -116,6 +122,10 @@ describe('AuthService', () => {
         { provide: MailService, useValue: mockMailService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: PasswordBreachService, useValue: mockPasswordBreachService },
+        {
+          provide: PasswordHistoryService,
+          useValue: mockPasswordHistoryService,
+        },
       ],
     }).compile();
 
@@ -739,15 +749,16 @@ describe('AuthService', () => {
     });
 
     it('throws BadRequestException when token is not found', async () => {
-      mockPrismaService.token.delete.mockRejectedValue(new Error('not found'));
+      mockPrismaService.token.findUnique.mockResolvedValue(null);
 
       await expect(service.resetPassword('bad-token', 'newPass')).rejects.toThrow(
         new BadRequestException('Invalid or expired reset token'),
       );
+      expect(mockPrismaService.token.delete).not.toHaveBeenCalled();
     });
 
     it('throws BadRequestException when token is expired', async () => {
-      mockPrismaService.token.delete.mockResolvedValue({
+      mockPrismaService.token.findUnique.mockResolvedValue({
         email: 'john@example.com',
         expiresIn: new Date(Date.now() - 1000),
       });
@@ -757,17 +768,58 @@ describe('AuthService', () => {
       );
     });
 
-    it('hashes new password, invalidates all sessions atomically on success', async () => {
-      mockPrismaService.token.delete.mockResolvedValue({
+    it('rejects a reused password without consuming the reset token', async () => {
+      mockPrismaService.token.findUnique.mockResolvedValue({
         email: 'john@example.com',
         expiresIn: new Date(Date.now() + 10000),
       });
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'user-123',
+        password: 'old-hash',
+      });
+      mockPasswordHistoryService.assertNotReused.mockRejectedValueOnce(
+        new BadRequestException(
+          "You can't reuse a recent password. Please choose a different one.",
+        ),
+      );
+
+      await expect(
+        service.resetPassword('valid-token', 'reused-pass'),
+      ).rejects.toThrow(/reuse a recent password/);
+
+      // The single-use token must survive a policy rejection.
+      expect(mockPrismaService.token.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('hashes new password, records history, invalidates all sessions atomically on success', async () => {
+      mockPrismaService.token.findUnique.mockResolvedValue({
+        email: 'john@example.com',
+        expiresIn: new Date(Date.now() + 10000),
+      });
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'user-123',
+        password: 'old-hash',
+      });
+      mockPrismaService.token.delete.mockResolvedValue({});
       mockedHash.mockResolvedValue('new-hashed-pw' as never);
       mockPrismaService.$transaction.mockResolvedValue([{}, {}]);
 
       const result = await service.resetPassword('valid-token', 'newPass123');
 
+      expect(mockPasswordHistoryService.assertNotReused).toHaveBeenCalledWith(
+        'user-123',
+        'newPass123',
+        'old-hash',
+      );
+      expect(mockPrismaService.token.delete).toHaveBeenCalledWith({
+        where: { token: 'valid-token' },
+      });
       expect(mockedHash).toHaveBeenCalledWith('newPass123');
+      expect(mockPasswordHistoryService.record).toHaveBeenCalledWith(
+        'user-123',
+        'old-hash',
+      );
       expect(mockPrismaService.$transaction).toHaveBeenCalled();
       expect(result.message).toContain('Password reset successfully');
     });

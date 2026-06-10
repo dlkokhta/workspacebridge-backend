@@ -31,9 +31,10 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  method   AuthMethod @default(CREDENTIALS)
-  Accounts Account[]
-  Session  Session[]
+  method          AuthMethod        @default(CREDENTIALS)
+  Accounts        Account[]
+  Session         Session[]
+  passwordHistory PasswordHistory[]
 
   ownedWorkspaces      Workspace[]         @relation("OwnedWorkspaces")
   workspaceMemberships WorkspaceMember[]   @relation("WorkspaceMemberships")
@@ -153,6 +154,20 @@ model Session {
   @@index([userId, createdAt])
   @@index([expiresAt])
   @@map("sessions")
+}
+
+model PasswordHistory {
+  id     String @id @default(uuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  // argon2 hash of a previously-used password, kept to block reuse.
+  password String
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_history")
 }
 
 model Workspace {

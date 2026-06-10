@@ -25,6 +25,7 @@ import {
   REMEMBER_ME_TTL_MS,
 } from './auth.constants';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
+import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 
 @Injectable()
 export class AuthService {
@@ -57,6 +58,7 @@ export class AuthService {
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
     private readonly passwordBreachService: PasswordBreachService,
+    private readonly passwordHistoryService: PasswordHistoryService,
   ) {
     this.jwtSecret = this.configService.getOrThrow<string>('JWT_SECRET');
     this.jwtRefreshSecret =
@@ -781,20 +783,16 @@ export class AuthService {
   }
 
   async resetPassword(token: string, password: string) {
-    // Breach check BEFORE the atomic token consume below — a breached
-    // password must not burn the single-use token, so the user can retry
-    // with a stronger one from the same reset link.
+    // All policy checks (breach, expiry, history) run read-only BEFORE the
+    // atomic consume below — a rejected password must not burn the
+    // single-use token, so the user can retry from the same reset link.
     await this.assertPasswordNotBreached(password);
 
-    // Atomic consume: delete returns the row if it existed, throws if not.
-    // Two concurrent requests race on this delete — exactly one wins.
-    let record: { email: string; expiresIn: Date };
-    try {
-      record = await this.prismaService.token.delete({
-        where: { token },
-        select: { email: true, expiresIn: true },
-      });
-    } catch {
+    const record = await this.prismaService.token.findUnique({
+      where: { token },
+      select: { email: true, expiresIn: true },
+    });
+    if (!record) {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
@@ -804,7 +802,33 @@ export class AuthService {
       );
     }
 
+    const user = await this.prismaService.user.findUnique({
+      where: { email: record.email },
+      select: { id: true, password: true },
+    });
+    if (!user) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    // Reject reuse of the current or any of the last 5 passwords.
+    await this.passwordHistoryService.assertNotReused(
+      user.id,
+      password,
+      user.password,
+    );
+
+    // Atomic consume: delete throws if the row is already gone. Two
+    // concurrent requests race on this delete — exactly one reaches the
+    // password write below.
+    try {
+      await this.prismaService.token.delete({ where: { token } });
+    } catch {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
     const hashedPassword = await argon2.hash(password);
+
+    await this.passwordHistoryService.record(user.id, user.password);
 
     await this.prismaService.$transaction([
       this.prismaService.user.update({

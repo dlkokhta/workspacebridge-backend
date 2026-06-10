@@ -450,6 +450,25 @@ describe('AuthController (e2e)', () => {
       expect(res.body.message).toContain('known data breach');
     });
 
+    it('returns 400 with a clear error when the new password was recently used', async () => {
+      mockAuthService.resetPassword.mockRejectedValue(
+        new BadRequestException(
+          "You can't reuse a recent password. Please choose a different one.",
+        ),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/reset-password')
+        .send({
+          token: 'valid-token',
+          password: 'Password1!',
+          passwordRepeat: 'Password1!',
+        })
+        .expect(400);
+
+      expect(res.body.message).toContain('reuse a recent password');
+    });
+
     it('returns 200 on successful password reset', async () => {
       mockAuthService.resetPassword.mockResolvedValue({
         message:
