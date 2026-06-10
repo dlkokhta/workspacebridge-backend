@@ -51,6 +51,7 @@ async function bootstrap() {
       'Authorization',
       'Content-Type',
       'X-Requested-With',
+      'X-CSRF-Token',
       'apollo-require-preflight',
     ],
     methods: ['GET', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],

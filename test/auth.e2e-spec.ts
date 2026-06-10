@@ -163,6 +163,12 @@ describe('AuthController (e2e)', () => {
       expect(refreshCookie!.toLowerCase()).toContain('httponly');
       // without rememberMe it is a session cookie — no Max-Age/Expires
       expect(refreshCookie!.toLowerCase()).not.toContain('max-age');
+
+      // the double-submit CSRF cookie ships alongside, readable by the SPA
+      const csrfCookie = cookies.find((c) => c.startsWith('csrfToken='));
+      expect(csrfCookie).toBeDefined();
+      expect(csrfCookie!.toLowerCase()).not.toContain('httponly');
+      expect(csrfCookie!.toLowerCase()).not.toContain('max-age');
     });
 
     it('sets a persistent 30-day cookie when rememberMe was chosen', async () => {
@@ -187,6 +193,8 @@ describe('AuthController (e2e)', () => {
       const cookies = res.headers['set-cookie'] as unknown as string[];
       const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
       expect(refreshCookie).toContain('Max-Age=2592000'); // 30 days
+      const csrfCookie = cookies.find((c) => c.startsWith('csrfToken='));
+      expect(csrfCookie).toContain('Max-Age=2592000');
     });
 
     it('rejects a non-boolean rememberMe', () => {
@@ -200,8 +208,33 @@ describe('AuthController (e2e)', () => {
   // ─── POST /auth/refresh ──────────────────────────────────────────────────────
 
   describe('POST /auth/refresh', () => {
+    // Double-submit CSRF pair used by the happy-path tests below.
+    const CSRF_PAIR = {
+      cookie: 'csrfToken=csrf-123',
+      header: ['X-CSRF-Token', 'csrf-123'] as const,
+    };
+
+    it('returns 403 when the CSRF token is missing', () => {
+      return request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', 'refreshToken=old-refresh-token')
+        .expect(403);
+    });
+
+    it('returns 403 when the CSRF header does not match the cookie', () => {
+      return request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', `refreshToken=old-refresh-token; ${CSRF_PAIR.cookie}`)
+        .set('X-CSRF-Token', 'wrong-value')
+        .expect(403);
+    });
+
     it('returns 401 when no refreshToken cookie is present', () => {
-      return request(app.getHttpServer()).post('/auth/refresh').expect(401);
+      return request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', CSRF_PAIR.cookie)
+        .set(...CSRF_PAIR.header)
+        .expect(401);
     });
 
     it('returns 401 when the refresh token is invalid', () => {
@@ -210,11 +243,12 @@ describe('AuthController (e2e)', () => {
       );
       return request(app.getHttpServer())
         .post('/auth/refresh')
-        .set('Cookie', 'refreshToken=bad-token')
+        .set('Cookie', `refreshToken=bad-token; ${CSRF_PAIR.cookie}`)
+        .set(...CSRF_PAIR.header)
         .expect(401);
     });
 
-    it('returns 200, returns new accessToken, and rotates the cookie', async () => {
+    it('returns 200, returns new accessToken, and rotates both cookies', async () => {
       mockAuthService.refresh.mockResolvedValue({
         accessToken: 'new-access-token',
         refreshToken: 'new-refresh-token',
@@ -223,7 +257,8 @@ describe('AuthController (e2e)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/auth/refresh')
-        .set('Cookie', 'refreshToken=old-refresh-token')
+        .set('Cookie', `refreshToken=old-refresh-token; ${CSRF_PAIR.cookie}`)
+        .set(...CSRF_PAIR.header)
         .expect(200);
 
       expect(res.body.accessToken).toBe('new-access-token');
@@ -232,6 +267,10 @@ describe('AuthController (e2e)', () => {
       const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
       expect(refreshCookie).toBeDefined();
       expect(refreshCookie!.toLowerCase()).not.toContain('max-age');
+      // CSRF cookie rotates alongside and must stay readable by the SPA
+      const csrfCookie = cookies.find((c) => c.startsWith('csrfToken='));
+      expect(csrfCookie).toBeDefined();
+      expect(csrfCookie!.toLowerCase()).not.toContain('httponly');
     });
 
     it('keeps the 30-day cookie lifetime for rememberMe sessions', async () => {
@@ -243,7 +282,8 @@ describe('AuthController (e2e)', () => {
 
       const res = await request(app.getHttpServer())
         .post('/auth/refresh')
-        .set('Cookie', 'refreshToken=old-refresh-token')
+        .set('Cookie', `refreshToken=old-refresh-token; ${CSRF_PAIR.cookie}`)
+        .set(...CSRF_PAIR.header)
         .expect(200);
 
       const cookies = res.headers['set-cookie'] as unknown as string[];
@@ -255,22 +295,35 @@ describe('AuthController (e2e)', () => {
   // ─── POST /auth/logout ───────────────────────────────────────────────────────
 
   describe('POST /auth/logout', () => {
-    it('returns 200 and clears the refreshToken cookie', async () => {
+    it('returns 403 when the CSRF token is missing', () => {
+      return request(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Cookie', 'refreshToken=some-token')
+        .expect(403);
+    });
+
+    it('returns 200 and clears both auth cookies', async () => {
       mockAuthService.logout.mockResolvedValue({ message: 'Logged out successfully' });
 
       const res = await request(app.getHttpServer())
         .post('/auth/logout')
-        .set('Cookie', 'refreshToken=some-token')
+        .set('Cookie', 'refreshToken=some-token; csrfToken=csrf-123')
+        .set('X-CSRF-Token', 'csrf-123')
         .expect(200);
 
       expect(res.body.message).toBe('Logged out successfully');
 
       const cookies = res.headers['set-cookie'] as unknown as string[];
       expect(cookies.some((c) => c.startsWith('refreshToken=;'))).toBe(true);
+      expect(cookies.some((c) => c.startsWith('csrfToken=;'))).toBe(true);
     });
 
-    it('returns 200 even without a cookie (idempotent)', () => {
-      return request(app.getHttpServer()).post('/auth/logout').expect(200);
+    it('returns 200 without a refresh cookie when CSRF is valid (idempotent)', () => {
+      return request(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Cookie', 'csrfToken=csrf-123')
+        .set('X-CSRF-Token', 'csrf-123')
+        .expect(200);
     });
   });
 

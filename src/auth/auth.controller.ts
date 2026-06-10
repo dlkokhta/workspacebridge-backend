@@ -28,10 +28,16 @@ import {
 } from './dto/two-factor.dto';
 import { GoogleOAuthGuard } from './guards/google-oauth.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { CsrfGuard } from './guards/csrf.guard';
 import { ApiBody, ApiOperation, ApiTags, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
-import { REMEMBER_ME_TTL_MS } from './auth.constants';
+import { randomBytes } from 'crypto';
+import {
+  CSRF_COOKIE,
+  REFRESH_COOKIE,
+  REMEMBER_ME_TTL_MS,
+} from './auth.constants';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -77,6 +83,31 @@ export class AuthController {
   // The server-side cap (30d vs 1d) is enforced by Session.expiresAt.
   private refreshCookieMaxAge(rememberMe?: boolean): number | undefined {
     return rememberMe ? REMEMBER_ME_TTL_MS : undefined;
+  }
+
+  // Sets the httpOnly refresh cookie together with the readable CSRF cookie
+  // (double-submit pattern, see CsrfGuard). Both share the same lifetime.
+  private setAuthCookies(
+    res: Response,
+    refreshToken: string,
+    rememberMe?: boolean,
+  ): void {
+    const maxAge = this.refreshCookieMaxAge(rememberMe);
+    res.cookie(REFRESH_COOKIE, refreshToken, this.getRefreshCookieOptions(maxAge));
+    res.cookie(CSRF_COOKIE, randomBytes(32).toString('hex'), {
+      ...this.getRefreshCookieOptions(maxAge),
+      httpOnly: false,
+    });
+  }
+
+  private clearAuthCookies(res: Response): void {
+    // Match the attributes the cookies were set with so the browser will
+    // actually drop them (Chrome/Firefox compare sameSite + secure on clear).
+    res.clearCookie(REFRESH_COOKIE, this.getRefreshCookieOptions());
+    res.clearCookie(CSRF_COOKIE, {
+      ...this.getRefreshCookieOptions(),
+      httpOnly: false,
+    });
   }
 
   // Google OAuth Login - Step 1: Redirect to Google
@@ -152,11 +183,7 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie(
-      'refreshToken',
-      result.refreshToken,
-      this.getRefreshCookieOptions(this.refreshCookieMaxAge(result.rememberMe)),
-    );
+    this.setAuthCookies(res, result.refreshToken, result.rememberMe);
 
     const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
     return rest;
@@ -213,13 +240,7 @@ export class AuthController {
       return loginResult; // { requiresTwoFactor: true, tempToken }
     }
 
-    res.cookie(
-      'refreshToken',
-      loginResult.refreshToken,
-      this.getRefreshCookieOptions(
-        this.refreshCookieMaxAge(loginResult.rememberMe),
-      ),
-    );
+    this.setAuthCookies(res, loginResult.refreshToken, loginResult.rememberMe);
 
     const { refreshToken: _rt, rememberMe: _rm, ...result } = loginResult;
     return result; // JSON body: { user, accessToken }
@@ -227,44 +248,47 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  // Cookie-authenticated endpoint — double-submit CSRF protection. The
+  // browser attaches the refresh cookie automatically, so without this a
+  // cross-site page could silently rotate the victim's session.
+  @UseGuards(CsrfGuard)
   @ApiOperation({ summary: 'Refresh access token using refreshToken cookie' })
   @ApiResponse({ status: 200, description: 'Returns new accessToken. Rotates refreshToken cookie.' })
   @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
+  @ApiResponse({ status: 403, description: 'Invalid or missing CSRF token' })
   public async refreshTokens(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = req.cookies['refreshToken'];
+    const refreshToken = req.cookies[REFRESH_COOKIE];
     if (!refreshToken) throw new UnauthorizedException('No refresh token');
 
     const tokens = await this.authService.refresh(refreshToken);
 
-    res.cookie(
-      'refreshToken',
-      tokens.refreshToken,
-      this.getRefreshCookieOptions(this.refreshCookieMaxAge(tokens.rememberMe)),
-    );
+    this.setAuthCookies(res, tokens.refreshToken, tokens.rememberMe);
 
     return { accessToken: tokens.accessToken };
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
+  // Cookie-authenticated like refresh — a cross-site page must not be able
+  // to forcibly log the victim out (session revocation is a state change).
+  @UseGuards(CsrfGuard)
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  @ApiResponse({ status: 403, description: 'Invalid or missing CSRF token' })
   public async logout(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = req.cookies['refreshToken'];
+    const refreshToken = req.cookies[REFRESH_COOKIE];
 
     if (refreshToken) {
       await this.authService.logout(refreshToken);
     }
 
-    // Match the attributes the cookie was set with so the browser will
-    // actually drop it (Chrome/Firefox compare sameSite + secure on clear).
-    res.clearCookie('refreshToken', this.getRefreshCookieOptions());
+    this.clearAuthCookies(res);
 
     return { message: 'Logged out successfully' };
   }
@@ -375,11 +399,7 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie(
-      'refreshToken',
-      result.refreshToken,
-      this.getRefreshCookieOptions(this.refreshCookieMaxAge(result.rememberMe)),
-    );
+    this.setAuthCookies(res, result.refreshToken, result.rememberMe);
 
     const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
     return rest; // { user, accessToken }
