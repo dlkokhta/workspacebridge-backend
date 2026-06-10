@@ -1,6 +1,8 @@
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
+  IsOptional,
   IsString,
   MaxLength,
   MinLength,
@@ -48,4 +50,14 @@ export class LoginUserDto {
     },
   )
   password: string;
+
+  @ApiProperty({
+    example: true,
+    required: false,
+    description:
+      'Keep the session alive for 30 days instead of the default 1 day',
+  })
+  @IsOptional()
+  @IsBoolean({ message: 'rememberMe must be a boolean' })
+  rememberMe?: boolean;
 }

@@ -145,6 +145,7 @@ describe('AuthController (e2e)', () => {
         user: { id: 'user-123', email: 'john@example.com' },
         accessToken: 'access-token-123',
         refreshToken: 'refresh-token-123',
+        rememberMe: false,
       });
 
       const res = await request(app.getHttpServer())
@@ -154,10 +155,45 @@ describe('AuthController (e2e)', () => {
 
       expect(res.body.accessToken).toBe('access-token-123');
       expect(res.body).not.toHaveProperty('refreshToken');
+      expect(res.body).not.toHaveProperty('rememberMe');
 
       const cookies = res.headers['set-cookie'] as unknown as string[];
-      expect(cookies.some((c) => c.startsWith('refreshToken='))).toBe(true);
-      expect(cookies.some((c) => c.toLowerCase().includes('httponly'))).toBe(true);
+      const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
+      expect(refreshCookie).toBeDefined();
+      expect(refreshCookie!.toLowerCase()).toContain('httponly');
+      // without rememberMe it is a session cookie — no Max-Age/Expires
+      expect(refreshCookie!.toLowerCase()).not.toContain('max-age');
+    });
+
+    it('sets a persistent 30-day cookie when rememberMe was chosen', async () => {
+      mockAuthService.loginUser.mockResolvedValue({
+        user: { id: 'user-123', email: 'john@example.com' },
+        accessToken: 'access-token-123',
+        refreshToken: 'refresh-token-123',
+        rememberMe: true,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ ...VALID_LOGIN, rememberMe: true })
+        .expect(200);
+
+      expect(mockAuthService.loginUser).toHaveBeenCalledWith(
+        expect.objectContaining({ rememberMe: true }),
+        expect.anything(),
+        undefined,
+      );
+
+      const cookies = res.headers['set-cookie'] as unknown as string[];
+      const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
+      expect(refreshCookie).toContain('Max-Age=2592000'); // 30 days
+    });
+
+    it('rejects a non-boolean rememberMe', () => {
+      return request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ ...VALID_LOGIN, rememberMe: 'yes' })
+        .expect(400);
     });
   });
 
@@ -182,6 +218,7 @@ describe('AuthController (e2e)', () => {
       mockAuthService.refresh.mockResolvedValue({
         accessToken: 'new-access-token',
         refreshToken: 'new-refresh-token',
+        rememberMe: false,
       });
 
       const res = await request(app.getHttpServer())
@@ -192,7 +229,26 @@ describe('AuthController (e2e)', () => {
       expect(res.body.accessToken).toBe('new-access-token');
 
       const cookies = res.headers['set-cookie'] as unknown as string[];
-      expect(cookies.some((c) => c.startsWith('refreshToken='))).toBe(true);
+      const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
+      expect(refreshCookie).toBeDefined();
+      expect(refreshCookie!.toLowerCase()).not.toContain('max-age');
+    });
+
+    it('keeps the 30-day cookie lifetime for rememberMe sessions', async () => {
+      mockAuthService.refresh.mockResolvedValue({
+        accessToken: 'new-access-token',
+        refreshToken: 'new-refresh-token',
+        rememberMe: true,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/refresh')
+        .set('Cookie', 'refreshToken=old-refresh-token')
+        .expect(200);
+
+      const cookies = res.headers['set-cookie'] as unknown as string[];
+      const refreshCookie = cookies.find((c) => c.startsWith('refreshToken='));
+      expect(refreshCookie).toContain('Max-Age=2592000');
     });
   });
 

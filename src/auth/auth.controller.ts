@@ -31,6 +31,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ApiBody, ApiOperation, ApiTags, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
+import { REMEMBER_ME_TTL_MS } from './auth.constants';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -53,7 +54,7 @@ export class AuthController {
   //   - production: sameSite='none', secure=true (works cross-domain)
   //   - dev:        sameSite='lax',  secure=false (works on localhost)
   // Override via the COOKIE_SAMESITE env variable.
-  private getRefreshCookieOptions(): CookieOptions {
+  private getRefreshCookieOptions(maxAge?: number): CookieOptions {
     const isProduction = process.env.NODE_ENV === 'production';
     const sameSite = (this.configService.get<string>('COOKIE_SAMESITE') ??
       (isProduction ? 'none' : 'lax')) as 'strict' | 'lax' | 'none';
@@ -66,8 +67,16 @@ export class AuthController {
       secure,
       sameSite,
       path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      // With maxAge undefined this is a session cookie the browser drops on
+      // close; "remember me" passes an explicit 30-day maxAge.
+      maxAge,
     };
+  }
+
+  // "Remember me" → persistent 30-day cookie; otherwise a session cookie.
+  // The server-side cap (30d vs 1d) is enforced by Session.expiresAt.
+  private refreshCookieMaxAge(rememberMe?: boolean): number | undefined {
+    return rememberMe ? REMEMBER_ME_TTL_MS : undefined;
   }
 
   // Google OAuth Login - Step 1: Redirect to Google
@@ -143,9 +152,13 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie('refreshToken', result.refreshToken, this.getRefreshCookieOptions());
+    res.cookie(
+      'refreshToken',
+      result.refreshToken,
+      this.getRefreshCookieOptions(this.refreshCookieMaxAge(result.rememberMe)),
+    );
 
-    const { refreshToken: _rt, ...rest } = result;
+    const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
     return rest;
   }
 
@@ -200,9 +213,15 @@ export class AuthController {
       return loginResult; // { requiresTwoFactor: true, tempToken }
     }
 
-    res.cookie('refreshToken', loginResult.refreshToken, this.getRefreshCookieOptions());
+    res.cookie(
+      'refreshToken',
+      loginResult.refreshToken,
+      this.getRefreshCookieOptions(
+        this.refreshCookieMaxAge(loginResult.rememberMe),
+      ),
+    );
 
-    const { refreshToken: _rt, ...result } = loginResult;
+    const { refreshToken: _rt, rememberMe: _rm, ...result } = loginResult;
     return result; // JSON body: { user, accessToken }
   }
 
@@ -220,7 +239,11 @@ export class AuthController {
 
     const tokens = await this.authService.refresh(refreshToken);
 
-    res.cookie('refreshToken', tokens.refreshToken, this.getRefreshCookieOptions());
+    res.cookie(
+      'refreshToken',
+      tokens.refreshToken,
+      this.getRefreshCookieOptions(this.refreshCookieMaxAge(tokens.rememberMe)),
+    );
 
     return { accessToken: tokens.accessToken };
   }
@@ -352,9 +375,13 @@ export class AuthController {
       userAgent,
     );
 
-    res.cookie('refreshToken', result.refreshToken, this.getRefreshCookieOptions());
+    res.cookie(
+      'refreshToken',
+      result.refreshToken,
+      this.getRefreshCookieOptions(this.refreshCookieMaxAge(result.rememberMe)),
+    );
 
-    const { refreshToken: _rt, ...rest } = result;
+    const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
     return rest; // { user, accessToken }
   }
 }

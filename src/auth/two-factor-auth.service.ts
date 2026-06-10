@@ -16,6 +16,10 @@ import {
   encryptSecret,
 } from '../libs/common/utils/secret-crypto';
 import { UserStatus } from '@prisma/client';
+import {
+  DEFAULT_SESSION_TTL_MS,
+  REMEMBER_ME_TTL_MS,
+} from './auth.constants';
 
 @Injectable()
 export class TwoFactorAuthService {
@@ -32,7 +36,6 @@ export class TwoFactorAuthService {
   // JWT_REFRESH_SECRET is unset. See AuthService for full rationale.
   private readonly jwtRefreshSecret: string;
   private readonly accessExpiresIn: string;
-  private readonly refreshExpiresIn: string;
 
   constructor(
     private readonly prismaService: PrismaService,
@@ -44,8 +47,6 @@ export class TwoFactorAuthService {
       this.configService.get<string>('JWT_REFRESH_SECRET') ?? this.jwtSecret;
     this.accessExpiresIn =
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
-    this.refreshExpiresIn =
-      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
   }
 
   async generateAndStoreSecret(userId: string, email: string) {
@@ -246,12 +247,16 @@ export class TwoFactorAuthService {
     });
 
     const sessionId = randomUUID();
+    // The rememberMe choice was made at the password step and rides in the
+    // tempToken payload — honor it when issuing the real session.
+    const rememberMe = !!payload.rememberMe;
+    const ttlMs = rememberMe ? REMEMBER_ME_TTL_MS : DEFAULT_SESSION_TTL_MS;
     const accessPayload = {
       userId: user.id,
       email: user.email,
       role: user.role,
     };
-    const refreshPayload = { ...accessPayload, sessionId };
+    const refreshPayload = { ...accessPayload, sessionId, rememberMe };
 
     const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
@@ -260,7 +265,7 @@ export class TwoFactorAuthService {
 
     const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtRefreshSecret,
-      expiresIn: this.refreshExpiresIn,
+      expiresIn: Math.floor(ttlMs / 1000),
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -284,13 +289,13 @@ export class TwoFactorAuthService {
         refreshToken: hashedRefreshToken,
         ip,
         userAgent,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + ttlMs),
       },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, twoFactorSecret, ...userSafe } = user;
 
-    return { user: userSafe, accessToken, refreshToken };
+    return { user: userSafe, accessToken, refreshToken, rememberMe };
   }
 }

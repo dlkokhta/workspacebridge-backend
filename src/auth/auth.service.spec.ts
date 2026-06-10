@@ -69,6 +69,9 @@ const mockPrismaService = {
   account: {
     create: jest.fn(),
   },
+  twoFactorAttempt: {
+    create: jest.fn(),
+  },
   $transaction: jest.fn(),
 };
 
@@ -286,6 +289,79 @@ describe('AuthService', () => {
       expect((result as { user: Record<string, unknown> }).user).not.toHaveProperty('password');
       expect(mockPrismaService.session.create).toHaveBeenCalled();
     });
+
+    it('defaults to a 1-day session without rememberMe', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(true);
+      mockedHash.mockResolvedValue('hashed-refresh' as never);
+      mockJwtService.sign
+        .mockReturnValueOnce('access-token')
+        .mockReturnValueOnce('refresh-token');
+      mockPrismaService.session.findMany.mockResolvedValue([]);
+      mockPrismaService.session.create.mockResolvedValue({});
+
+      const result = await service.loginUser({
+        email: 'john@example.com',
+        password: 'correct',
+      });
+
+      expect(result).toHaveProperty('rememberMe', false);
+      // refresh JWT carries the choice and is signed for 1 day
+      const [refreshPayload, refreshOptions] = mockJwtService.sign.mock.calls[1];
+      expect(refreshPayload).toMatchObject({ rememberMe: false });
+      expect(refreshOptions).toMatchObject({ expiresIn: 24 * 60 * 60 });
+      // session row expires ~1 day out
+      const sessionData = mockPrismaService.session.create.mock.calls[0][0].data;
+      const ttl = sessionData.expiresAt.getTime() - Date.now();
+      expect(ttl).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+      expect(ttl).toBeGreaterThan(23 * 60 * 60 * 1000);
+    });
+
+    it('creates a 30-day session when rememberMe is requested', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(true);
+      mockedHash.mockResolvedValue('hashed-refresh' as never);
+      mockJwtService.sign
+        .mockReturnValueOnce('access-token')
+        .mockReturnValueOnce('refresh-token');
+      mockPrismaService.session.findMany.mockResolvedValue([]);
+      mockPrismaService.session.create.mockResolvedValue({});
+
+      const result = await service.loginUser({
+        email: 'john@example.com',
+        password: 'correct',
+        rememberMe: true,
+      });
+
+      expect(result).toHaveProperty('rememberMe', true);
+      const [refreshPayload, refreshOptions] = mockJwtService.sign.mock.calls[1];
+      expect(refreshPayload).toMatchObject({ rememberMe: true });
+      expect(refreshOptions).toMatchObject({ expiresIn: 30 * 24 * 60 * 60 });
+      const sessionData = mockPrismaService.session.create.mock.calls[0][0].data;
+      const ttl = sessionData.expiresAt.getTime() - Date.now();
+      expect(ttl).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
+    });
+
+    it('carries the rememberMe choice into the 2FA pre-auth token', async () => {
+      mockUserService.findByEmail.mockResolvedValue({
+        ...fakeUser,
+        isTwoFactorEnabled: true,
+      });
+      mockedVerify.mockResolvedValue(true);
+      mockJwtService.sign.mockReturnValueOnce('temp-token');
+      mockPrismaService.twoFactorAttempt.create.mockResolvedValue({});
+
+      const result = await service.loginUser({
+        email: 'john@example.com',
+        password: 'correct',
+        rememberMe: true,
+      });
+
+      expect(result).toEqual({ requiresTwoFactor: true, tempToken: 'temp-token' });
+      expect(mockJwtService.sign.mock.calls[0][0]).toMatchObject({
+        rememberMe: true,
+      });
+    });
   });
 
   // ─── refresh ────────────────────────────────────────────────────────────────
@@ -362,9 +438,51 @@ describe('AuthService', () => {
 
       const result = await service.refresh('valid-refresh-token');
 
-      expect(result).toEqual({ accessToken: 'new-access', refreshToken: 'new-refresh' });
+      expect(result).toEqual({
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        rememberMe: false,
+      });
       expect(mockPrismaService.session.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'session-1' } }),
+      );
+    });
+
+    it('preserves the rememberMe choice across rotation', async () => {
+      mockJwtService.verify.mockReturnValue({
+        userId: 'user-123',
+        email: 'john@example.com',
+        role: 'FREELANCER',
+        sessionId: 'session-1',
+        rememberMe: true,
+      });
+      mockPrismaService.session.findUnique.mockResolvedValue({
+        id: 'session-1',
+        userId: 'user-123',
+        refreshToken: 'hashed-token',
+        previousRefreshToken: null,
+        tokenRotatedAt: null,
+        expiresAt: new Date(Date.now() + 10000),
+      });
+      mockedVerify.mockResolvedValue(true);
+      mockPrismaService.user.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+      mockJwtService.sign
+        .mockReturnValueOnce('new-access')
+        .mockReturnValueOnce('new-refresh');
+      mockedHash.mockResolvedValue('new-hashed-refresh' as never);
+      mockPrismaService.session.update.mockResolvedValue({});
+
+      const result = await service.refresh('valid-refresh-token');
+
+      expect(result).toMatchObject({ rememberMe: true });
+      // new refresh JWT keeps the flag and the 30-day expiry
+      const [refreshPayload, refreshOptions] = mockJwtService.sign.mock.calls[1];
+      expect(refreshPayload).toMatchObject({ rememberMe: true });
+      expect(refreshOptions).toMatchObject({ expiresIn: 30 * 24 * 60 * 60 });
+      // session row extended ~30 days out
+      const updateData = mockPrismaService.session.update.mock.calls[0][0].data;
+      expect(updateData.expiresAt.getTime() - Date.now()).toBeGreaterThan(
+        29 * 24 * 60 * 60 * 1000,
       );
     });
   });

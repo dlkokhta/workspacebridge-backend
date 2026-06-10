@@ -20,6 +20,10 @@ import { randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import { GoogleUser } from './types/google-user.type';
 import { UserStatus } from '@prisma/client';
+import {
+  DEFAULT_SESSION_TTL_MS,
+  REMEMBER_ME_TTL_MS,
+} from './auth.constants';
 
 @Injectable()
 export class AuthService {
@@ -31,7 +35,6 @@ export class AuthService {
   // production should set a distinct value.
   private readonly jwtRefreshSecret: string;
   private readonly accessExpiresIn: string;
-  private readonly refreshExpiresIn: string;
 
   // Precomputed argon2 hash used as a constant-time dummy during failed
   // logins. Verifying against this takes the same time as a real
@@ -64,8 +67,12 @@ export class AuthService {
     }
     this.accessExpiresIn =
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
-    this.refreshExpiresIn =
-      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d';
+  }
+
+  // Refresh-token/session lifetime: 30 days with "remember me", 1 day
+  // otherwise (the old fixed JWT_REFRESH_EXPIRES_IN=7d is no longer used).
+  private sessionTtlMs(rememberMe?: boolean): number {
+    return rememberMe ? REMEMBER_ME_TTL_MS : DEFAULT_SESSION_TTL_MS;
   }
 
   private static readonly MAX_FAILED_LOGIN_ATTEMPTS = 5;
@@ -170,12 +177,17 @@ export class AuthService {
     }
 
     const sessionId = randomUUID();
+    // OAuth sign-ins behave like "remember me" — the Google flow has no
+    // checkbox, and forcing daily re-logins there would be hostile. Matches
+    // the reference implementation.
+    const rememberMe = true;
+    const ttlMs = this.sessionTtlMs(rememberMe);
     const accessPayload = {
       userId: user.id,
       email: user.email,
       role: user.role,
     };
-    const refreshPayload = { ...accessPayload, sessionId };
+    const refreshPayload = { ...accessPayload, sessionId, rememberMe };
 
     const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
@@ -183,7 +195,7 @@ export class AuthService {
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtRefreshSecret,
-      expiresIn: this.refreshExpiresIn,
+      expiresIn: Math.floor(ttlMs / 1000),
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -197,7 +209,7 @@ export class AuthService {
         refreshToken: hashedRefreshToken,
         ip,
         userAgent,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + ttlMs),
       },
     });
 
@@ -206,6 +218,7 @@ export class AuthService {
       user: userWithoutPassword,
       accessToken,
       refreshToken,
+      rememberMe,
     };
   }
 
@@ -267,12 +280,15 @@ export class AuthService {
     }
 
     const sessionId = randomUUID();
+    // OAuth sign-ins are persistent — see exchangeCodeForTokens.
+    const rememberMe = true;
+    const ttlMs = this.sessionTtlMs(rememberMe);
     const accessPayload = {
       userId: userExist.id,
       email: userExist.email,
       role: userExist.role,
     };
-    const refreshPayload = { ...accessPayload, sessionId };
+    const refreshPayload = { ...accessPayload, sessionId, rememberMe };
 
     const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
@@ -280,7 +296,7 @@ export class AuthService {
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtRefreshSecret,
-      expiresIn: this.refreshExpiresIn,
+      expiresIn: Math.floor(ttlMs / 1000),
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -294,7 +310,7 @@ export class AuthService {
         refreshToken: hashedRefreshToken,
         ip,
         userAgent,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: new Date(Date.now() + ttlMs),
       },
     });
 
@@ -302,6 +318,7 @@ export class AuthService {
       userExist,
       accessToken,
       refreshToken,
+      rememberMe,
     };
   }
 
@@ -441,10 +458,13 @@ export class AuthService {
       });
     }
 
+    const rememberMe = !!loginUserDto.rememberMe;
+
     // If 2FA is enabled, issue a short-lived pre-auth token instead of
     // full tokens. We attach a jti (JWT ID) and persist it as a
     // TwoFactorAttempt row so /auth/2fa/verify can detect replays and
-    // cap brute-force guesses per token regardless of source IP.
+    // cap brute-force guesses per token regardless of source IP. The
+    // rememberMe choice rides in the tempToken so it survives the 2FA step.
     if (userExist.isTwoFactorEnabled) {
       const jti = randomUUID();
       const tempTokenTtlMs = 5 * 60 * 1000;
@@ -453,6 +473,7 @@ export class AuthService {
           userId: userExist.id,
           email: userExist.email,
           role: userExist.role,
+          rememberMe,
           isTwoFactorAuthenticated: false,
         },
         { secret: this.jwtSecret, expiresIn: '5m', jwtid: jti },
@@ -468,12 +489,13 @@ export class AuthService {
     }
 
     const sessionId = randomUUID();
+    const ttlMs = this.sessionTtlMs(rememberMe);
     const accessPayload = {
       userId: userExist.id,
       email: userExist.email,
       role: userExist.role,
     };
-    const refreshPayload = { ...accessPayload, sessionId };
+    const refreshPayload = { ...accessPayload, sessionId, rememberMe };
 
     const accessToken = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
@@ -481,7 +503,7 @@ export class AuthService {
     });
     const refreshToken = this.jwtService.sign(refreshPayload, {
       secret: this.jwtRefreshSecret,
-      expiresIn: this.refreshExpiresIn,
+      expiresIn: Math.floor(ttlMs / 1000),
     });
 
     const hashedRefreshToken = await argon2.hash(refreshToken);
@@ -495,7 +517,7 @@ export class AuthService {
         refreshToken: hashedRefreshToken,
         ip,
         userAgent,
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        expiresAt: new Date(Date.now() + ttlMs),
       },
     });
 
@@ -505,6 +527,7 @@ export class AuthService {
       user: userWithoutPassword,
       accessToken,
       refreshToken, // this can go in cookie
+      rememberMe,
     };
   }
 
@@ -567,13 +590,20 @@ export class AuthService {
       throw new UnauthorizedException('Account is suspended');
     }
 
-    // 5. generate new tokens (sessionId stays the same across rotations)
+    // 5. generate new tokens (sessionId stays the same across rotations;
+    //    the rememberMe choice is preserved from the old token's payload)
+    const rememberMe = !!payload.rememberMe;
+    const ttlMs = this.sessionTtlMs(rememberMe);
     const accessPayload = {
       userId: payload.userId,
       email: payload.email,
       role: payload.role,
     };
-    const refreshPayloadNew = { ...accessPayload, sessionId: session.id };
+    const refreshPayloadNew = {
+      ...accessPayload,
+      sessionId: session.id,
+      rememberMe,
+    };
 
     const newAccess = this.jwtService.sign(accessPayload, {
       secret: this.jwtSecret,
@@ -581,7 +611,7 @@ export class AuthService {
     });
     const newRefresh = this.jwtService.sign(refreshPayloadNew, {
       secret: this.jwtRefreshSecret,
-      expiresIn: this.refreshExpiresIn,
+      expiresIn: Math.floor(ttlMs / 1000),
     });
 
     // 6. rotate: update existing session in-place, keeping previous hash for grace window
@@ -591,11 +621,11 @@ export class AuthService {
         previousRefreshToken: isGraceHit ? session.previousRefreshToken : session.refreshToken,
         refreshToken: await argon2.hash(newRefresh),
         tokenRotatedAt: new Date(),
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        expiresAt: new Date(Date.now() + ttlMs),
       },
     });
 
-    return { accessToken: newAccess, refreshToken: newRefresh };
+    return { accessToken: newAccess, refreshToken: newRefresh, rememberMe };
   }
 
   async logout(refreshToken: string) {
