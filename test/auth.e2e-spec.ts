@@ -12,6 +12,7 @@ import * as cookieParser from 'cookie-parser';
 import * as request from 'supertest';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
+import { TwoFactorAuthService } from '../src/auth/two-factor-auth.service';
 
 const VALID_SIGNUP = {
   firstname: 'John',
@@ -36,6 +37,13 @@ const mockAuthService = {
   resetPassword: jest.fn(),
 };
 
+const mockTwoFactorAuthService = {
+  generateAndStoreSecret: jest.fn(),
+  enableTwoFactor: jest.fn(),
+  disableTwoFactor: jest.fn(),
+  verifyTwoFactorForLogin: jest.fn(),
+};
+
 describe('AuthController (e2e)', () => {
   let app: INestApplication;
 
@@ -44,6 +52,7 @@ describe('AuthController (e2e)', () => {
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: mockAuthService },
+        { provide: TwoFactorAuthService, useValue: mockTwoFactorAuthService },
         {
           provide: ConfigService,
           useValue: { get: jest.fn(), getOrThrow: jest.fn() },

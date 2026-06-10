@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { UserService } from './user.service';
@@ -32,6 +41,39 @@ export class UserController {
   @Patch('me/password')
   changePassword(@Req() req: Request, @Body() dto: ChangePasswordDto) {
     return this.userService.changePassword((req.user as any).id, dto);
+  }
+
+  // ── Sessions ────────────────────────────────────────────────────────────
+
+  @ApiOperation({ summary: 'List active sessions for the current user' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns active sessions; the current one is flagged',
+  })
+  @Get('sessions')
+  getSessions(@Req() req: Request) {
+    return this.userService.getSessions(
+      (req.user as any).id,
+      req.cookies?.['refreshToken'],
+    );
+  }
+
+  @ApiOperation({ summary: 'Revoke all sessions except the current one' })
+  @ApiResponse({ status: 200, description: 'Other sessions revoked' })
+  @Delete('sessions')
+  revokeOtherSessions(@Req() req: Request) {
+    return this.userService.revokeOtherSessions(
+      (req.user as any).id,
+      req.cookies?.['refreshToken'],
+    );
+  }
+
+  @ApiOperation({ summary: 'Revoke a specific session by id' })
+  @ApiResponse({ status: 200, description: 'Session revoked' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @Delete('sessions/:id')
+  revokeSession(@Req() req: Request, @Param('id') id: string) {
+    return this.userService.revokeSession((req.user as any).id, id);
   }
 }
 

@@ -16,10 +16,13 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  afterEach(async () => {
+    await app.close();
+  });
+
+  // The root route is intentionally not exposed (see app.controller.ts);
+  // this scaffold test now just proves the full AppModule boots.
+  it('/ (GET) returns 404 — no root route is exposed', () => {
+    return request(app.getHttpServer()).get('/').expect(404);
   });
 });

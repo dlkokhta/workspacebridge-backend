@@ -1,13 +1,28 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { hash, verify } from 'argon2';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { JwtPayload } from '../auth/types/jwt-payload.type';
 
 @Injectable()
 export class UserService {
-  constructor(private readonly prismaService: PrismaService) {}
+  // Same fallback rule as AuthService: refresh tokens use their own
+  // secret when JWT_REFRESH_SECRET is set, otherwise JWT_SECRET.
+  private readonly jwtRefreshSecret: string;
+
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {
+    this.jwtRefreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET') ??
+      this.configService.getOrThrow<string>('JWT_SECRET');
+  }
 
   public async findByEmail(email: string) {
     return this.prismaService.user.findUnique({
@@ -75,5 +90,73 @@ export class UserService {
       where: { id },
       data: { password: hashed },
     });
+  }
+
+  // ── Sessions ────────────────────────────────────────────────────────────
+
+  // The refresh cookie's JWT carries the sessionId, so the caller's own
+  // session is identified by one signature check instead of argon2-verifying
+  // every stored hash. A missing/invalid cookie just means no session gets
+  // flagged as current — the endpoints themselves are guarded by the access
+  // token, not by this cookie.
+  private resolveCurrentSessionId(refreshToken?: string): string | null {
+    if (!refreshToken) return null;
+    try {
+      const payload = this.jwtService.verify<JwtPayload>(refreshToken, {
+        secret: this.jwtRefreshSecret,
+      });
+      return payload.sessionId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async getSessions(userId: string, currentRefreshToken?: string) {
+    const currentSessionId = this.resolveCurrentSessionId(currentRefreshToken);
+    const sessions = await this.prismaService.session.findMany({
+      where: { userId, expiresAt: { gt: new Date() } },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        ip: true,
+        userAgent: true,
+        createdAt: true,
+        updatedAt: true,
+        expiresAt: true,
+      },
+    });
+
+    return sessions.map((session) => ({
+      ...session,
+      isCurrent: session.id === currentSessionId,
+    }));
+  }
+
+  public async revokeSession(userId: string, sessionId: string) {
+    const session = await this.prismaService.session.findUnique({
+      where: { id: sessionId },
+      select: { userId: true },
+    });
+    // Same 404 whether the session does not exist or belongs to someone
+    // else — never confirm another user's session ids.
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('Session not found');
+    }
+    await this.prismaService.session.delete({ where: { id: sessionId } });
+    return { message: 'Session revoked' };
+  }
+
+  public async revokeOtherSessions(
+    userId: string,
+    currentRefreshToken?: string,
+  ) {
+    const currentSessionId = this.resolveCurrentSessionId(currentRefreshToken);
+    const { count } = await this.prismaService.session.deleteMany({
+      where: {
+        userId,
+        ...(currentSessionId ? { id: { not: currentSessionId } } : {}),
+      },
+    });
+    return { message: 'Other sessions revoked', count };
   }
 }

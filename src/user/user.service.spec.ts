@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { UserService } from './user.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
@@ -28,6 +30,21 @@ const mockPrismaService = {
     create: jest.fn(),
     update: jest.fn(),
   },
+  session: {
+    findMany: jest.fn(),
+    findUnique: jest.fn(),
+    delete: jest.fn(),
+    deleteMany: jest.fn(),
+  },
+};
+
+const mockJwtService = {
+  verify: jest.fn(),
+};
+
+const mockConfigService = {
+  get: jest.fn().mockReturnValue(undefined),
+  getOrThrow: jest.fn().mockReturnValue('test-jwt-secret'),
 };
 
 describe('UserService', () => {
@@ -38,6 +55,8 @@ describe('UserService', () => {
       providers: [
         UserService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: JwtService, useValue: mockJwtService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
@@ -247,6 +266,143 @@ describe('UserService', () => {
         where: { id: 'user-123' },
         data: { password: 'new-hashed-pw' },
       });
+    });
+  });
+
+  // ─── getSessions ────────────────────────────────────────────────────────────
+
+  describe('getSessions', () => {
+    const fakeSessions = [
+      {
+        id: 'session-1',
+        ip: '1.2.3.4',
+        userAgent: 'Chrome',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        expiresAt: new Date(Date.now() + 1000),
+      },
+      {
+        id: 'session-2',
+        ip: '5.6.7.8',
+        userAgent: 'Safari',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        expiresAt: new Date(Date.now() + 1000),
+      },
+    ];
+
+    it('flags the session matching the refresh cookie sessionId as current', async () => {
+      mockPrismaService.session.findMany.mockResolvedValue(fakeSessions);
+      mockJwtService.verify.mockReturnValue({ sessionId: 'session-2' });
+
+      const result = await service.getSessions('user-123', 'refresh-jwt');
+
+      expect(mockPrismaService.session.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-123', expiresAt: { gt: expect.any(Date) } },
+        }),
+      );
+      expect(result).toEqual([
+        expect.objectContaining({ id: 'session-1', isCurrent: false }),
+        expect.objectContaining({ id: 'session-2', isCurrent: true }),
+      ]);
+    });
+
+    it('never selects the stored refresh token hash', async () => {
+      mockPrismaService.session.findMany.mockResolvedValue(fakeSessions);
+      mockJwtService.verify.mockReturnValue({ sessionId: 'session-1' });
+
+      await service.getSessions('user-123', 'refresh-jwt');
+
+      const args = mockPrismaService.session.findMany.mock.calls[0][0];
+      expect(args.select).not.toHaveProperty('refreshToken');
+    });
+
+    it('flags nothing as current when no refresh cookie is provided', async () => {
+      mockPrismaService.session.findMany.mockResolvedValue(fakeSessions);
+
+      const result = await service.getSessions('user-123');
+
+      expect(mockJwtService.verify).not.toHaveBeenCalled();
+      expect(result.every((s) => s.isCurrent === false)).toBe(true);
+    });
+
+    it('flags nothing as current when the refresh cookie is invalid', async () => {
+      mockPrismaService.session.findMany.mockResolvedValue(fakeSessions);
+      mockJwtService.verify.mockImplementation(() => {
+        throw new Error('invalid token');
+      });
+
+      const result = await service.getSessions('user-123', 'tampered-jwt');
+
+      expect(result.every((s) => s.isCurrent === false)).toBe(true);
+    });
+  });
+
+  // ─── revokeSession ──────────────────────────────────────────────────────────
+
+  describe('revokeSession', () => {
+    it('deletes the session when it belongs to the user', async () => {
+      mockPrismaService.session.findUnique.mockResolvedValue({
+        userId: 'user-123',
+      });
+
+      const result = await service.revokeSession('user-123', 'session-1');
+
+      expect(mockPrismaService.session.delete).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+      });
+      expect(result).toEqual({ message: 'Session revoked' });
+    });
+
+    it('throws NotFoundException when the session does not exist', async () => {
+      mockPrismaService.session.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.revokeSession('user-123', 'missing'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.session.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws the same NotFoundException when the session belongs to another user', async () => {
+      mockPrismaService.session.findUnique.mockResolvedValue({
+        userId: 'someone-else',
+      });
+
+      await expect(
+        service.revokeSession('user-123', 'session-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.session.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── revokeOtherSessions ────────────────────────────────────────────────────
+
+  describe('revokeOtherSessions', () => {
+    it('deletes all sessions except the current one', async () => {
+      mockJwtService.verify.mockReturnValue({ sessionId: 'session-current' });
+      mockPrismaService.session.deleteMany.mockResolvedValue({ count: 3 });
+
+      const result = await service.revokeOtherSessions('user-123', 'refresh-jwt');
+
+      expect(mockPrismaService.session.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123', id: { not: 'session-current' } },
+      });
+      expect(result).toEqual({ message: 'Other sessions revoked', count: 3 });
+    });
+
+    it('deletes every session when the refresh cookie cannot be resolved', async () => {
+      mockJwtService.verify.mockImplementation(() => {
+        throw new Error('invalid token');
+      });
+      mockPrismaService.session.deleteMany.mockResolvedValue({ count: 4 });
+
+      const result = await service.revokeOtherSessions('user-123', 'bad-jwt');
+
+      expect(mockPrismaService.session.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123' },
+      });
+      expect(result.count).toBe(4);
     });
   });
 });
