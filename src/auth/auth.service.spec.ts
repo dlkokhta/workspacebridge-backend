@@ -7,7 +7,6 @@ import { MailService } from '../mail/mail.service';
 import { ConfigService } from '@nestjs/config';
 import {
   BadRequestException,
-  ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
@@ -81,6 +80,7 @@ const mockPrismaService = {
 const mockMailService = {
   sendVerificationEmail: jest.fn(),
   sendPasswordResetEmail: jest.fn(),
+  sendAccountExistsEmail: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockConfigService = {
@@ -120,18 +120,47 @@ describe('AuthService', () => {
   // ─── registerUser ───────────────────────────────────────────────────────────
 
   describe('registerUser', () => {
-    it('throws ConflictException when email is already registered', async () => {
+    const SIGNUP_DTO = {
+      email: 'john@example.com',
+      password: 'pass',
+      passwordRepeat: 'pass',
+      firstname: 'John',
+      lastname: 'Doe',
+    };
+
+    it('returns the same success message for a duplicate email (no enumeration)', async () => {
       mockUserService.findByEmail.mockResolvedValue(fakeUser);
 
-      await expect(
-        service.registerUser({
-          email: 'john@example.com',
-          password: 'pass',
-          passwordRepeat: 'pass',
-          firstname: 'John',
-          lastname: 'Doe',
+      const result = await service.registerUser(SIGNUP_DTO);
+
+      expect(result).toEqual({
+        message:
+          'Registration successful! Please check your email to verify your account.',
+      });
+      // nothing is created and no verification email goes out
+      expect(mockUserService.create).not.toHaveBeenCalled();
+      expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
+      // the real owner is told by email and the attempt is audited
+      expect(mockMailService.sendAccountExistsEmail).toHaveBeenCalledWith(
+        fakeUser.email,
+      );
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'auth.register_duplicate',
+          targetId: fakeUser.id,
         }),
-      ).rejects.toThrow(ConflictException);
+      });
+    });
+
+    it('does not fail the duplicate path when the email send fails', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser);
+      mockMailService.sendAccountExistsEmail.mockRejectedValueOnce(
+        new Error('resend down'),
+      );
+
+      const result = await service.registerUser(SIGNUP_DTO);
+
+      expect(result.message).toContain('Registration successful');
     });
 
     it('creates user, sends verification email, and returns a message', async () => {
@@ -141,13 +170,7 @@ describe('AuthService', () => {
       mockPrismaService.token.create.mockResolvedValue({});
       mockMailService.sendVerificationEmail.mockResolvedValue(undefined);
 
-      const result = await service.registerUser({
-        email: 'john@example.com',
-        password: 'pass',
-        passwordRepeat: 'pass',
-        firstname: 'John',
-        lastname: 'Doe',
-      });
+      const result = await service.registerUser(SIGNUP_DTO);
 
       expect(mockUserService.create).toHaveBeenCalled();
       expect(mockMailService.sendVerificationEmail).toHaveBeenCalledWith(
@@ -155,6 +178,12 @@ describe('AuthService', () => {
         expect.any(String),
       );
       expect(result.message).toContain('Registration successful');
+      // response must be byte-identical to the duplicate path — in
+      // particular no user object (the Prisma user carries the hash)
+      expect(result).not.toHaveProperty('user');
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ action: 'auth.register' }),
+      });
     });
   });
 

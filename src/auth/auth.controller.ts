@@ -204,7 +204,13 @@ export class AuthController {
   @Throttle({ default: { ttl: 60000, limit: 5 } })
   @ApiOperation({ summary: 'Register a new user' })
   @ApiBody({ type: CreateUserDto })
-  @ApiResponse({ status: 200, description: 'User registered. Verification email sent.' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Generic success message — identical whether the email was new ' +
+      '(verification email sent) or already registered (owner notified by ' +
+      'email instead). Prevents user enumeration.',
+  })
   @ApiResponse({ status: 400, description: 'Validation error' })
   @ApiResponse({ status: 429, description: 'Too many attempts. Please try again later.' })
   public async registerUser(@Body() createUserDto: CreateUserDto) {

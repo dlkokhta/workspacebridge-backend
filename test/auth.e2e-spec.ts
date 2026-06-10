@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   INestApplication,
   NotFoundException,
   UnauthorizedException,
@@ -88,14 +87,23 @@ describe('AuthController (e2e)', () => {
         .expect(400);
     });
 
-    it('returns 409 when email is already registered', () => {
-      mockAuthService.registerUser.mockRejectedValue(
-        new ConflictException('User already exists'),
-      );
-      return request(app.getHttpServer())
+    it('returns the same 200 success body for a duplicate email (no enumeration)', async () => {
+      // The service resolves with the same generic message for duplicates;
+      // the wire response must be indistinguishable from a fresh signup.
+      mockAuthService.registerUser.mockResolvedValue({
+        message:
+          'Registration successful! Please check your email to verify your account.',
+      });
+
+      const res = await request(app.getHttpServer())
         .post('/auth/signup')
         .send(VALID_SIGNUP)
-        .expect(409);
+        .expect(200);
+
+      expect(res.body).toEqual({
+        message:
+          'Registration successful! Please check your email to verify your account.',
+      });
     });
 
     it('returns 200 and a success message on valid registration', async () => {

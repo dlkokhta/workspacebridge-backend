@@ -407,9 +407,29 @@ export class AuthService {
 
   ///////////////////////////////////////////////////////////////////////////////////
 
+  // Identical for fresh signups and duplicate attempts — the response body
+  // must never reveal whether an email is already registered.
+  private static readonly REGISTRATION_MESSAGE =
+    'Registration successful! Please check your email to verify your account.';
+
   async registerUser(createUserDto: CreateUserDto) {
     const userExist = await this.userService.findByEmail(createUserDto.email);
-    if (userExist) throw new ConflictException('User already exists');
+
+    if (userExist) {
+      // Same response as a successful signup, so the form can't be used to
+      // probe which emails are registered (user enumeration). The real owner
+      // is told by email instead. Fire-and-forget: a mail failure must not
+      // turn the duplicate path into a distinguishable 500.
+      void this.mailService
+        .sendAccountExistsEmail(userExist.email)
+        .catch((err) =>
+          this.logger.error('Failed to send account-exists email', err),
+        );
+      this.auditAuthEvent('auth.register_duplicate', userExist.id, {
+        email: userExist.email,
+      });
+      return { message: AuthService.REGISTRATION_MESSAGE };
+    }
 
     const newUser = await this.userService.create(createUserDto);
 
@@ -417,10 +437,11 @@ export class AuthService {
     const token = await this.createVerificationToken(newUser.email);
     await this.mailService.sendVerificationEmail(newUser.email, token);
 
-    return {
-      message: 'Registration successful! Please check your email to verify your account.',
-      user: newUser,
-    };
+    this.auditAuthEvent('auth.register', newUser.id, { email: newUser.email });
+
+    // Note: no user object in the response — it must be indistinguishable
+    // from the duplicate path (and the full Prisma user carries the hash).
+    return { message: AuthService.REGISTRATION_MESSAGE };
   }
 
   async loginUser(loginUserDto: LoginUserDto, ip?: string, userAgent?: string) {
