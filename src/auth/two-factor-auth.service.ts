@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -9,13 +10,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import * as speakeasy from 'speakeasy';
 import * as qrcode from 'qrcode';
 import * as argon2 from 'argon2';
-import { randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import {
   decryptSecret,
   encryptSecret,
 } from '../libs/common/utils/secret-crypto';
-import { UserStatus } from '@prisma/client';
+import { Prisma, UserStatus } from '@prisma/client';
 import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
@@ -24,7 +25,10 @@ import { LoginAlertService } from './login-alert.service';
 
 @Injectable()
 export class TwoFactorAuthService {
+  private readonly logger = new Logger(TwoFactorAuthService.name);
+
   private static readonly MAX_VERIFY_ATTEMPTS_PER_TOKEN = 5;
+  private static readonly BACKUP_CODE_COUNT = 10;
   // Pending 2FA setup expires after this window. The user has to scan the
   // QR code and submit the first TOTP code before it lapses; otherwise
   // they need to start over with a fresh secret. Long enough to find
@@ -49,6 +53,89 @@ export class TwoFactorAuthService {
       this.configService.get<string>('JWT_REFRESH_SECRET') ?? this.jwtSecret;
     this.accessExpiresIn =
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m';
+  }
+
+  // ── Backup codes ─────────────────────────────────────────────────────────
+
+  // 10 codes in xxxx-xxxx hex form. Only SHA-256 hashes are stored; the
+  // plaintext codes are shown to the user exactly once. SHA-256 (not argon2)
+  // is fine here: the input space is 2^32 random values, not a human
+  // password, so brute-forcing the hash is already infeasible.
+  private generatePlainBackupCodes(): string[] {
+    const codes: string[] = [];
+    for (let i = 0; i < TwoFactorAuthService.BACKUP_CODE_COUNT; i++) {
+      const raw = randomBytes(4).toString('hex');
+      codes.push(`${raw.slice(0, 4)}-${raw.slice(4)}`);
+    }
+    return codes;
+  }
+
+  private hashBackupCode(code: string): string {
+    return createHash('sha256').update(code.replace('-', '')).digest('hex');
+  }
+
+  // Replaces the user's entire code set — old codes (used or not) become
+  // invalid the moment a new set is issued.
+  private async storeBackupCodes(userId: string, plainCodes: string[]) {
+    await this.prismaService.backupCode.deleteMany({ where: { userId } });
+    await this.prismaService.backupCode.createMany({
+      data: plainCodes.map((code) => ({
+        userId,
+        code: this.hashBackupCode(code),
+      })),
+    });
+  }
+
+  async regenerateBackupCodes(userId: string, totpCode: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user?.isTwoFactorEnabled || !user?.twoFactorSecret) {
+      throw new BadRequestException('2FA is not enabled on this account');
+    }
+
+    // Re-prove possession of the authenticator before rotating the codes —
+    // a hijacked session alone must not be able to mint fresh codes.
+    const isValid = speakeasy.totp.verify({
+      secret: decryptSecret(user.twoFactorSecret),
+      encoding: 'base32',
+      token: totpCode,
+      window: 1,
+    });
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid authentication code');
+    }
+
+    const plainCodes = this.generatePlainBackupCodes();
+    await this.storeBackupCodes(userId, plainCodes);
+
+    this.audit('auth.backup_codes_regenerated', userId, {
+      email: user.email,
+    });
+
+    return { backupCodes: plainCodes };
+  }
+
+  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent.
+  private audit(
+    action: string,
+    userId: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    const cleanMetadata = JSON.parse(
+      JSON.stringify(metadata),
+    ) as Prisma.InputJsonValue;
+    void Promise.resolve(
+      this.prismaService.auditLog.create({
+        data: {
+          action,
+          targetType: 'user',
+          targetId: userId,
+          actorId: userId,
+          metadata: cleanMetadata,
+        },
+      }),
+    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
   }
 
   async generateAndStoreSecret(userId: string, email: string) {
@@ -129,7 +216,12 @@ export class TwoFactorAuthService {
       }),
     ]);
 
-    return { message: '2FA enabled successfully' };
+    // Issue the recovery codes alongside enablement — this response is the
+    // only time the plaintext codes ever leave the server.
+    const backupCodes = this.generatePlainBackupCodes();
+    await this.storeBackupCodes(userId, backupCodes);
+
+    return { message: '2FA enabled successfully', backupCodes };
   }
 
   async disableTwoFactor(userId: string, code: string, password: string) {
@@ -172,15 +264,25 @@ export class TwoFactorAuthService {
       data: { isTwoFactorEnabled: false, twoFactorSecret: null },
     });
 
+    // Recovery codes are only meaningful while 2FA is on.
+    await this.prismaService.backupCode.deleteMany({ where: { userId } });
+
     return { message: '2FA disabled successfully' };
   }
 
   async verifyTwoFactorForLogin(
     tempToken: string,
-    code: string,
+    code: string | undefined,
     ip?: string,
     userAgent?: string,
+    backupCode?: string,
   ) {
+    if (!code && !backupCode) {
+      throw new BadRequestException(
+        'Provide either a TOTP code or a backup code',
+      );
+    }
+
     let payload: JwtPayload;
     try {
       payload = this.jwtService.verify<JwtPayload>(tempToken, {
@@ -221,25 +323,42 @@ export class TwoFactorAuthService {
       throw new BadRequestException('2FA is not configured for this account');
     }
 
-    const isValid = speakeasy.totp.verify({
-      secret: decryptSecret(user.twoFactorSecret),
-      encoding: 'base32',
-      token: code,
-      window: 1,
-    });
-
-    if (!isValid) {
-      // Count the failed attempt. Burn the token (consumed=true) once we
-      // hit the cap so further guesses against this same tempToken are
-      // rejected even if the JWT itself hasn't expired yet.
-      const nextAttempts = attempt.attempts + 1;
-      const shouldBurn =
-        nextAttempts >= TwoFactorAuthService.MAX_VERIFY_ATTEMPTS_PER_TOKEN;
-      await this.prismaService.twoFactorAttempt.update({
-        where: { jti: payload.jti },
-        data: { attempts: nextAttempts, consumed: shouldBurn },
+    if (backupCode) {
+      // One-time recovery code path. Shares the per-token attempt
+      // accounting with TOTP, so code guessing burns the tempToken just
+      // as fast either way.
+      const stored = await this.prismaService.backupCode.findFirst({
+        where: {
+          userId: user.id,
+          code: this.hashBackupCode(backupCode),
+          usedAt: null,
+        },
       });
-      throw new UnauthorizedException('Invalid authentication code');
+      if (!stored) {
+        await this.registerFailedVerifyAttempt(payload.jti, attempt.attempts);
+        throw new UnauthorizedException('Invalid or already used backup code');
+      }
+      await this.prismaService.backupCode.update({
+        where: { id: stored.id },
+        data: { usedAt: new Date() },
+      });
+      this.audit('auth.backup_code_used', user.id, {
+        email: user.email,
+        ip,
+        userAgent,
+      });
+    } else {
+      const isValid = speakeasy.totp.verify({
+        secret: decryptSecret(user.twoFactorSecret),
+        encoding: 'base32',
+        token: code!,
+        window: 1,
+      });
+
+      if (!isValid) {
+        await this.registerFailedVerifyAttempt(payload.jti, attempt.attempts);
+        throw new UnauthorizedException('Invalid authentication code');
+      }
     }
 
     // Successful verify — burn the token so it can never be replayed.
@@ -308,5 +427,21 @@ export class TwoFactorAuthService {
     const { password, twoFactorSecret, ...userSafe } = user;
 
     return { user: userSafe, accessToken, refreshToken, rememberMe };
+  }
+
+  // Count a failed verify against this tempToken. Burn the token
+  // (consumed=true) once we hit the cap so further guesses against this
+  // same tempToken are rejected even if the JWT itself hasn't expired yet.
+  private async registerFailedVerifyAttempt(
+    jti: string,
+    priorAttempts: number,
+  ) {
+    const nextAttempts = priorAttempts + 1;
+    const shouldBurn =
+      nextAttempts >= TwoFactorAuthService.MAX_VERIFY_ATTEMPTS_PER_TOKEN;
+    await this.prismaService.twoFactorAttempt.update({
+      where: { jti },
+      data: { attempts: nextAttempts, consumed: shouldBurn },
+    });
   }
 }

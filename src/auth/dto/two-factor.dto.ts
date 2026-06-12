@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Length } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, Length, ValidateIf } from 'class-validator';
 
 export class TwoFactorCodeDto {
   @ApiProperty({ example: '123456', description: '6-digit TOTP code from authenticator app' })
@@ -28,8 +28,17 @@ export class VerifyTwoFactorLoginDto {
   @IsString()
   tempToken: string;
 
-  @ApiProperty({ example: '123456', description: '6-digit TOTP code from authenticator app' })
+  // Exactly one of code / backupCode is expected; each is validated only
+  // when the other is absent so the error messages stay specific.
+  @ApiPropertyOptional({ example: '123456', description: '6-digit TOTP code from authenticator app' })
+  @ValidateIf((o: VerifyTwoFactorLoginDto) => !o.backupCode)
   @IsString()
   @Length(6, 6, { message: 'Code must be exactly 6 digits' })
-  code: string;
+  code?: string;
+
+  @ApiPropertyOptional({ example: 'a1b2-c3d4', description: 'One-time backup recovery code' })
+  @ValidateIf((o: VerifyTwoFactorLoginDto) => !o.code)
+  @IsString()
+  @IsNotEmpty({ message: 'Backup code must not be empty' })
+  backupCode?: string;
 }

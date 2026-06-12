@@ -379,6 +379,23 @@ export class AuthController {
     );
   }
 
+  @Post('2fa/backup-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  // Same per-IP cap as 2fa/verify — the route accepts a TOTP guess.
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @ApiOperation({ summary: 'Regenerate 2FA backup codes (requires current TOTP code)' })
+  @ApiBody({ type: TwoFactorCodeDto })
+  @ApiResponse({ status: 200, description: 'Returns the new set of one-time backup codes' })
+  @ApiResponse({ status: 401, description: 'Invalid code' })
+  public async regenerateBackupCodes(
+    @Req() req: Request,
+    @Body() body: TwoFactorCodeDto,
+  ) {
+    const user = req.user as User;
+    return this.twoFactorAuthService.regenerateBackupCodes(user.id, body.code);
+  }
+
   @Post('2fa/verify')
   @HttpCode(HttpStatus.OK)
   // Brute-force protection: 5 attempts per minute per IP. TOTP space is
@@ -403,6 +420,7 @@ export class AuthController {
       body.code,
       ip,
       userAgent,
+      body.backupCode,
     );
 
     this.setAuthCookies(res, result.refreshToken, result.rememberMe);

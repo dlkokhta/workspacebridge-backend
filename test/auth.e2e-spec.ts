@@ -384,6 +384,53 @@ describe('AuthController (e2e)', () => {
     });
   });
 
+  // ─── POST /auth/2fa/verify ───────────────────────────────────────────────────
+
+  describe('POST /auth/2fa/verify', () => {
+    it('returns 400 when neither code nor backup code is provided', () => {
+      return request(app.getHttpServer())
+        .post('/auth/2fa/verify')
+        .send({ tempToken: 'temp-token' })
+        .expect(400);
+    });
+
+    it('accepts a backup code instead of a TOTP code', async () => {
+      mockTwoFactorAuthService.verifyTwoFactorForLogin.mockResolvedValue({
+        user: { id: 'user-123', email: 'john@example.com' },
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        rememberMe: false,
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/2fa/verify')
+        .send({ tempToken: 'temp-token', backupCode: 'a1b2-c3d4' })
+        .expect(200);
+
+      expect(
+        mockTwoFactorAuthService.verifyTwoFactorForLogin,
+      ).toHaveBeenCalledWith(
+        'temp-token',
+        undefined,
+        expect.anything(),
+        undefined,
+        'a1b2-c3d4',
+      );
+      expect(res.body.accessToken).toBe('access-token');
+      expect(res.body).not.toHaveProperty('refreshToken');
+    });
+
+    it('returns 401 for an invalid or already used backup code', () => {
+      mockTwoFactorAuthService.verifyTwoFactorForLogin.mockRejectedValue(
+        new UnauthorizedException('Invalid or already used backup code'),
+      );
+      return request(app.getHttpServer())
+        .post('/auth/2fa/verify')
+        .send({ tempToken: 'temp-token', backupCode: 'dead-beef' })
+        .expect(401);
+    });
+  });
+
   // ─── POST /auth/forgot-password ──────────────────────────────────────────────
 
   describe('POST /auth/forgot-password', () => {
