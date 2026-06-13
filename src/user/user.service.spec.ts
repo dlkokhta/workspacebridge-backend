@@ -5,6 +5,7 @@ import { UserService } from './user.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
+import { MailService } from '../mail/mail.service';
 import { NotFoundException, BadRequestException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
@@ -38,6 +39,17 @@ const mockPrismaService = {
     delete: jest.fn(),
     deleteMany: jest.fn(),
   },
+  account: {
+    findMany: jest.fn(),
+    deleteMany: jest.fn(),
+  },
+  auditLog: {
+    create: jest.fn().mockResolvedValue({}),
+  },
+};
+
+const mockMailService = {
+  sendSignInMethodAddedEmail: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockJwtService = {
@@ -73,6 +85,7 @@ describe('UserService', () => {
           provide: PasswordHistoryService,
           useValue: mockPasswordHistoryService,
         },
+        { provide: MailService, useValue: mockMailService },
       ],
     }).compile();
 
@@ -471,6 +484,84 @@ describe('UserService', () => {
         where: { userId: 'user-123' },
       });
       expect(result.count).toBe(4);
+    });
+  });
+
+  describe('getSignInMethods', () => {
+    it('reports password status and de-duplicated providers', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ password: 'hash' });
+      mockPrismaService.account.findMany.mockResolvedValue([
+        { provider: 'google' },
+        { provider: 'google' },
+      ]);
+
+      const result = await service.getSignInMethods('user-123');
+
+      expect(result).toEqual({ hasPassword: true, providers: ['google'] });
+    });
+  });
+
+  describe('setPassword', () => {
+    it('rejects when a password is already set', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        email: 'a@b.com',
+        password: 'existing-hash',
+      });
+
+      await expect(service.setPassword('user-123', 'New1!pass')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('sets a hashed password and alerts the owner when none exists', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        email: 'a@b.com',
+        password: null,
+      });
+      mockPasswordBreachService.isBreached.mockResolvedValue(false);
+      mockedHash.mockResolvedValue('new-hash' as never);
+      mockPrismaService.user.update.mockResolvedValue({});
+
+      await service.setPassword('user-123', 'New1!pass');
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-123' },
+        data: { password: 'new-hash' },
+      });
+      expect(mockMailService.sendSignInMethodAddedEmail).toHaveBeenCalledWith(
+        'a@b.com',
+        expect.objectContaining({ method: 'Password' }),
+      );
+    });
+  });
+
+  describe('disconnectProvider', () => {
+    it('refuses to remove the only remaining sign-in method', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ password: null });
+      mockPrismaService.account.findMany.mockResolvedValue([
+        { provider: 'google' },
+      ]);
+
+      await expect(
+        service.disconnectProvider('user-123', 'google'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrismaService.account.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('disconnects when a password remains as a fallback', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ password: 'hash' });
+      mockPrismaService.account.findMany.mockResolvedValue([
+        { provider: 'google' },
+      ]);
+      mockPrismaService.account.deleteMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.disconnectProvider('user-123', 'google');
+
+      expect(mockPrismaService.account.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123', provider: 'google' },
+      });
+      expect(result.message).toContain('disconnected');
     });
   });
 });

@@ -477,6 +477,82 @@ export class MailService {
     `.trim();
   }
 
+  // Security alert sent when a new way to sign in (Google link, or a password
+  // on a previously OAuth-only account) is added — so the owner notices an
+  // unauthorized addition.
+  async sendSignInMethodAddedEmail(
+    email: string,
+    info: { method: string; date: Date },
+  ) {
+    const from =
+      this.configService.get<string>('RESEND_FROM_EMAIL') ??
+      'noreply@example.com';
+
+    await this.resend.emails.send({
+      from,
+      to: email,
+      subject: 'A new sign-in method was added to your account',
+      html: this.buildSignInMethodAddedEmail(info),
+    });
+  }
+
+  private buildSignInMethodAddedEmail(info: {
+    method: string;
+    date: Date;
+  }): string {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+    const resetUrl = `${frontendUrl}/passwordRecovery`;
+    const when = info.date.toUTCString();
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>New sign-in method added</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="520" cellpadding="0" cellspacing="0"
+          style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:#5a8a6b;padding:32px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:0.5px;">
+                New sign-in method added
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:36px 40px;">
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                <strong>${info.method}</strong> was just added as a way to sign in to your
+                WorkspaceBridge account on <strong>${when}</strong>.
+              </p>
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                If this was you, no action is needed. If you didn't do this,
+                <a href="${resetUrl}" style="color:#5a8a6b;">reset your password</a>
+                immediately and review your account security.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                This is a security notification from WorkspaceBridge.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
   async sendNotificationEmail({
     to,
     heading,

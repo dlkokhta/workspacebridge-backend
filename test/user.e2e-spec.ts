@@ -19,6 +19,9 @@ const mockUserService = {
   getSessions: jest.fn(),
   revokeSession: jest.fn(),
   revokeOtherSessions: jest.fn(),
+  getSignInMethods: jest.fn(),
+  setPassword: jest.fn(),
+  disconnectProvider: jest.fn(),
 };
 
 const FAKE_SESSIONS = [
@@ -129,6 +132,90 @@ describe('UserController (e2e)', () => {
         .expect(400);
 
       expect(res.body.message).toContain('reuse a recent password');
+    });
+  });
+
+  // ─── Sign-in methods (set-password / disconnect / list) ──────────────────────
+
+  describe('GET /user/me/sign-in-methods', () => {
+    it('returns hasPassword and linked providers', async () => {
+      mockUserService.getSignInMethods.mockResolvedValue({
+        hasPassword: false,
+        providers: ['google'],
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/user/me/sign-in-methods')
+        .expect(200);
+
+      expect(res.body).toEqual({ hasPassword: false, providers: ['google'] });
+      expect(mockUserService.getSignInMethods).toHaveBeenCalledWith('user-123');
+    });
+  });
+
+  describe('POST /user/me/password/set', () => {
+    it('sets a password and returns 200', async () => {
+      mockUserService.setPassword.mockResolvedValue(undefined);
+
+      const res = await request(app.getHttpServer())
+        .post('/user/me/password/set')
+        .send({ newPassword: 'BrandNew1!' })
+        .expect(200);
+
+      expect(res.body.message).toContain('Password set');
+      expect(mockUserService.setPassword).toHaveBeenCalledWith(
+        'user-123',
+        'BrandNew1!',
+      );
+    });
+
+    it('returns 400 for a weak password (DTO validation)', () => {
+      return request(app.getHttpServer())
+        .post('/user/me/password/set')
+        .send({ newPassword: 'weak' })
+        .expect(400);
+    });
+
+    it('returns 400 when a password already exists', async () => {
+      mockUserService.setPassword.mockRejectedValue(
+        new BadRequestException('A password is already set.'),
+      );
+
+      return request(app.getHttpServer())
+        .post('/user/me/password/set')
+        .send({ newPassword: 'BrandNew1!' })
+        .expect(400);
+    });
+  });
+
+  describe('DELETE /user/me/accounts/:provider', () => {
+    it('disconnects a provider and returns 200', async () => {
+      mockUserService.disconnectProvider.mockResolvedValue({
+        message: 'google disconnected',
+      });
+
+      const res = await request(app.getHttpServer())
+        .delete('/user/me/accounts/Google')
+        .expect(200);
+
+      expect(res.body.message).toContain('disconnected');
+      // provider is lower-cased by the controller before the service call.
+      expect(mockUserService.disconnectProvider).toHaveBeenCalledWith(
+        'user-123',
+        'google',
+      );
+    });
+
+    it('returns 400 when it is the only sign-in method', async () => {
+      mockUserService.disconnectProvider.mockRejectedValue(
+        new BadRequestException(
+          "You can't disconnect your only sign-in method. Set a password first.",
+        ),
+      );
+
+      return request(app.getHttpServer())
+        .delete('/user/me/accounts/google')
+        .expect(400);
     });
   });
 

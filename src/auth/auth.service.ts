@@ -13,7 +13,6 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import * as argon2 from 'argon2';
-import { GoogleRegisterDto } from './dto/google-register.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { MailService } from '../mail/mail.service';
 import { createHash, randomUUID } from 'crypto';
@@ -416,58 +415,131 @@ export class AuthService {
     };
   }
 
-  //google user registration
-  async registerGoogleUser(googleUserRegister: GoogleRegisterDto) {
-    const userExist = await this.userService.findByEmail(
-      googleUserRegister.email,
-    );
-    if (userExist) throw new ConflictException('User already exists');
-
-    // Create Google user directly without password
-    const newUser = await this.prismaService.user.create({
-      data: {
-        email: googleUserRegister.email,
-        firstname: googleUserRegister.firstName || '',
-        lastname: googleUserRegister.lastName || '',
-        password: null, // Google users don't have password
-        method: 'GOOGLE',
-        isVerified: true, // Email already verified by Google
-      },
+  /**
+   * Creates or updates the Google identity (`Account` row) for a user. Keyed on
+   * the stable Google subject id, so a returning user is matched even if their
+   * email later changes. Idempotent: an existing google link is updated in place.
+   */
+  private async linkGoogleAccount(userId: string, googleUser: GoogleUser) {
+    const existing = await this.prismaService.account.findFirst({
+      where: { provider: 'google', userId },
     });
 
-    const newAccount = await this.prismaService.account.create({
+    const expiresAt = googleUser.expiresAt
+      ? new Date(googleUser.expiresAt * 1000)
+      : null;
+
+    if (existing) {
+      return this.prismaService.account.update({
+        where: { id: existing.id },
+        data: {
+          providerAccountId:
+            googleUser.googleId ?? existing.providerAccountId,
+          accessToken: googleUser.accessToken ?? existing.accessToken,
+          refreshToken: googleUser.refreshToken ?? existing.refreshToken,
+          expiresAt: expiresAt ?? existing.expiresAt,
+        },
+      });
+    }
+
+    return this.prismaService.account.create({
       data: {
         type: 'oauth',
         provider: 'google',
-        providerAccountId: googleUserRegister.googleId,
-        userId: newUser.id,
-        accessToken: googleUserRegister.accessToken || null,
-        refreshToken: googleUserRegister.refreshToken || null,
-        expiresAt: googleUserRegister.expiresAt
-          ? new Date(googleUserRegister.expiresAt * 1000)
-          : null,
+        providerAccountId: googleUser.googleId,
+        userId,
+        accessToken: googleUser.accessToken ?? null,
+        refreshToken: googleUser.refreshToken ?? null,
+        expiresAt,
       },
     });
-    return { newUser, newAccount };
   }
 
-  async findOrCreateGoogleUser(googleUser: GoogleUser, ip?: string, userAgent?: string) {
-    const existingUser = await this.userService.findByEmail(googleUser.email);
-
-    if (existingUser) {
-      return this.loginGoogleUser({ email: googleUser.email }, ip, userAgent);
+  /**
+   * Google sign-in / sign-up. Matches on the stable provider subject id (not
+   * email), refuses unverified Google emails, and never auto-adopts an
+   * unverified local account (anti pre-hijacking). See AUTH_PARITY_SPEC.md.
+   */
+  async findOrCreateGoogleUser(
+    googleUser: GoogleUser,
+    ip?: string,
+    userAgent?: string,
+  ) {
+    if (!googleUser?.email) {
+      throw new UnauthorizedException(
+        'Google did not provide an email address.',
+      );
+    }
+    if (!googleUser.emailVerified) {
+      throw new UnauthorizedException(
+        'Your Google email address is not verified.',
+      );
     }
 
-    const newUser = await this.registerGoogleUser({
-      email: googleUser.email,
-      firstName: googleUser.firstName,
-      lastName: googleUser.lastName,
-      provider: 'google',
-      googleId: googleUser.googleId,
-      avatar: googleUser.avatar,
-    });
+    // 1. Returning user — matched on the stable Google subject id, so a later
+    //    email change on either side doesn't break or mis-route the login.
+    if (googleUser.googleId) {
+      const account = await this.prismaService.account.findFirst({
+        where: { provider: 'google', providerAccountId: googleUser.googleId },
+        include: { user: true },
+      });
+      if (account?.user) {
+        return this.loginGoogleUser(
+          { email: account.user.email },
+          ip,
+          userAgent,
+        );
+      }
+    }
 
-    return this.loginGoogleUser({ email: newUser.newUser.email }, ip, userAgent);
+    // 2. A local account already owns this email.
+    const existingUser = await this.userService.findByEmail(googleUser.email);
+    if (existingUser) {
+      // Never adopt an unverified local account: a squatter could have
+      // pre-registered the address to hijack the real owner's Google sign-in.
+      if (!existingUser.isVerified) {
+        throw new ConflictException(
+          'An account with this email already exists but is not verified. ' +
+            'Please verify your email address first, then sign in with Google again.',
+        );
+      }
+      await this.linkGoogleAccount(existingUser.id, googleUser);
+      this.auditAuthEvent('auth.account_linked', existingUser.id, {
+        email: existingUser.email,
+        provider: 'google',
+      });
+      // Tell the owner a new sign-in method was added; a mail failure must not
+      // break sign-in.
+      void this.mailService
+        .sendSignInMethodAddedEmail(existingUser.email, {
+          method: 'Google',
+          date: new Date(),
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to send sign-in-method-added alert: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      return this.loginGoogleUser({ email: existingUser.email }, ip, userAgent);
+    }
+
+    // 3. Brand-new user — Google has already verified the email.
+    const newUser = await this.prismaService.user.create({
+      data: {
+        email: googleUser.email,
+        firstname: googleUser.firstName || '',
+        lastname: googleUser.lastName || '',
+        picture: googleUser.avatar || null,
+        password: null, // Google users have no password until they set one
+        method: 'GOOGLE',
+        isVerified: true,
+      },
+    });
+    await this.linkGoogleAccount(newUser.id, googleUser);
+    this.auditAuthEvent('auth.google_register', newUser.id, {
+      email: newUser.email,
+    });
+    return this.loginGoogleUser({ email: newUser.email }, ip, userAgent);
   }
 
   ///////////////////////////////////////////////////////////////////////////////////

@@ -75,6 +75,8 @@ const mockPrismaService = {
   },
   account: {
     create: jest.fn(),
+    findFirst: jest.fn(),
+    update: jest.fn(),
   },
   twoFactorAttempt: {
     create: jest.fn(),
@@ -91,6 +93,7 @@ const mockMailService = {
   sendAccountExistsEmail: jest.fn().mockResolvedValue(undefined),
   sendEmailChangeVerification: jest.fn().mockResolvedValue(undefined),
   sendEmailChangedAlert: jest.fn().mockResolvedValue(undefined),
+  sendSignInMethodAddedEmail: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockPasswordBreachService = {
@@ -1043,6 +1046,117 @@ describe('AuthService', () => {
         ConflictException,
       );
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── findOrCreateGoogleUser (secure linking) ──────────────────────────────────
+
+  describe('findOrCreateGoogleUser', () => {
+    const googleUser = {
+      googleId: 'google-sub-1',
+      email: 'g@example.com',
+      emailVerified: true,
+      firstName: 'G',
+      lastName: 'User',
+    };
+
+    // loginGoogleUser issues a real session — wire its dependencies.
+    const setupSessionIssuance = () => {
+      mockJwtService.sign.mockReturnValue('signed-token');
+      mockedHash.mockResolvedValue('hashed' as never);
+      mockPrismaService.session.findMany.mockResolvedValue([]);
+      mockPrismaService.session.create.mockResolvedValue({});
+    };
+
+    it('refuses an unverified Google email', async () => {
+      await expect(
+        service.findOrCreateGoogleUser({ ...googleUser, emailVerified: false }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled();
+    });
+
+    it('matches a returning user by Google sub without creating anything', async () => {
+      setupSessionIssuance();
+      mockPrismaService.account.findFirst.mockResolvedValue({
+        user: { id: 'u1', email: 'g@example.com', role: 'FREELANCER' },
+      });
+      mockUserService.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'g@example.com',
+        role: 'FREELANCER',
+        status: 'ACTIVE',
+      });
+
+      const result = await service.findOrCreateGoogleUser(googleUser);
+
+      expect(result.accessToken).toBe('signed-token');
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled();
+      expect(mockPrismaService.account.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses to link to an unverified local account (anti pre-hijacking)', async () => {
+      mockPrismaService.account.findFirst.mockResolvedValue(null);
+      mockUserService.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'g@example.com',
+        isVerified: false,
+      });
+
+      await expect(service.findOrCreateGoogleUser(googleUser)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockPrismaService.account.create).not.toHaveBeenCalled();
+    });
+
+    it('links a verified local account and alerts the owner', async () => {
+      setupSessionIssuance();
+      mockPrismaService.account.findFirst.mockResolvedValue(null);
+      mockUserService.findByEmail.mockResolvedValue({
+        id: 'u1',
+        email: 'g@example.com',
+        role: 'FREELANCER',
+        status: 'ACTIVE',
+        isVerified: true,
+      });
+      mockPrismaService.account.create.mockResolvedValue({});
+
+      const result = await service.findOrCreateGoogleUser(googleUser);
+
+      expect(mockPrismaService.account.create).toHaveBeenCalled();
+      expect(mockMailService.sendSignInMethodAddedEmail).toHaveBeenCalledWith(
+        'g@example.com',
+        expect.objectContaining({ method: 'Google' }),
+      );
+      expect(result.accessToken).toBe('signed-token');
+    });
+
+    it('creates a brand-new Google user (no password, verified) when none exists', async () => {
+      setupSessionIssuance();
+      mockPrismaService.account.findFirst.mockResolvedValue(null);
+      // step 2 lookup → none; loginGoogleUser lookup → the freshly created user.
+      mockUserService.findByEmail
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'u2',
+          email: 'g@example.com',
+          role: 'FREELANCER',
+          status: 'ACTIVE',
+        });
+      mockPrismaService.user.create.mockResolvedValue({
+        id: 'u2',
+        email: 'g@example.com',
+      });
+      mockPrismaService.account.create.mockResolvedValue({});
+
+      const result = await service.findOrCreateGoogleUser(googleUser);
+
+      const created = mockPrismaService.user.create.mock.calls[0][0] as {
+        data: { method: string; isVerified: boolean; password: null };
+      };
+      expect(created.data.method).toBe('GOOGLE');
+      expect(created.data.isVerified).toBe(true);
+      expect(created.data.password).toBeNull();
+      expect(result.accessToken).toBe('signed-token');
     });
   });
 });

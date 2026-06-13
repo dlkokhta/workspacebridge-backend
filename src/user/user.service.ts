@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { CreateUserDto } from '../auth/dto/create-user.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { hash, verify } from 'argon2';
@@ -9,9 +15,11 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class UserService {
+  private readonly logger = new Logger(UserService.name);
   // Same fallback rule as AuthService: refresh tokens use their own
   // secret when JWT_REFRESH_SECRET is set, otherwise JWT_SECRET.
   private readonly jwtRefreshSecret: string;
@@ -22,6 +30,7 @@ export class UserService {
     private readonly configService: ConfigService,
     private readonly passwordBreachService: PasswordBreachService,
     private readonly passwordHistoryService: PasswordHistoryService,
+    private readonly mailService: MailService,
   ) {
     this.jwtRefreshSecret =
       this.configService.get<string>('JWT_REFRESH_SECRET') ??
@@ -108,6 +117,131 @@ export class UserService {
       where: { id },
       data: { password: hashed },
     });
+  }
+
+  // ── Sign-in methods (password + linked OAuth providers) ───────────────────
+
+  // What the profile UI needs to render the "sign-in methods" card.
+  public async getSignInMethods(userId: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: { password: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const accounts = await this.prismaService.account.findMany({
+      where: { userId },
+      select: { provider: true },
+    });
+    const providers = [...new Set(accounts.map((a) => a.provider))];
+
+    return { hasPassword: !!user.password, providers };
+  }
+
+  /**
+   * Sets a password for an account that doesn't have one yet (e.g. a Google
+   * user adding a password so they aren't locked into a single provider).
+   * Accounts that already have a password must use changePassword instead.
+   */
+  public async setPassword(userId: string, newPassword: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.password) {
+      throw new BadRequestException(
+        'A password is already set. Use change password instead.',
+      );
+    }
+    // HIBP k-anonymity breach check (fails open on outage), same as changePassword.
+    if (await this.passwordBreachService.isBreached(newPassword)) {
+      throw new BadRequestException(
+        'This password has appeared in a known data breach. Please choose a different one.',
+      );
+    }
+    const hashed = await hash(newPassword);
+    await this.prismaService.user.update({
+      where: { id: userId },
+      data: { password: hashed },
+    });
+
+    this.audit('auth.password_set', userId, { email: user.email });
+
+    // Alert the owner a new sign-in method was added; a mail failure must not
+    // break the request.
+    void this.mailService
+      .sendSignInMethodAddedEmail(user.email, {
+        method: 'Password',
+        date: new Date(),
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Failed to send sign-in-method-added alert: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+  }
+
+  /**
+   * Unlinks an OAuth provider. Refuses to remove the user's last remaining way
+   * to sign in — they must keep at least a password or another linked provider,
+   * otherwise they'd lock themselves out.
+   */
+  public async disconnectProvider(userId: string, provider: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: { password: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const accounts = await this.prismaService.account.findMany({
+      where: { userId },
+      select: { provider: true },
+    });
+
+    const linked = accounts.filter((a) => a.provider === provider);
+    if (linked.length === 0) {
+      throw new NotFoundException(`No linked ${provider} account`);
+    }
+
+    const otherProviders = accounts.filter(
+      (a) => a.provider !== provider,
+    ).length;
+    const remainingMethods = (user.password ? 1 : 0) + otherProviders;
+    if (remainingMethods === 0) {
+      throw new BadRequestException(
+        "You can't disconnect your only sign-in method. Set a password first.",
+      );
+    }
+
+    await this.prismaService.account.deleteMany({
+      where: { userId, provider },
+    });
+
+    this.audit('auth.provider_disconnected', userId, { provider });
+
+    return { message: `${provider} disconnected` };
+  }
+
+  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent.
+  private audit(
+    action: string,
+    userId: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    const cleanMetadata = JSON.parse(
+      JSON.stringify(metadata),
+    ) as Prisma.InputJsonValue;
+    void Promise.resolve(
+      this.prismaService.auditLog.create({
+        data: {
+          action,
+          targetType: 'user',
+          targetId: userId,
+          actorId: userId,
+          metadata: cleanMetadata,
+        },
+      }),
+    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
   }
 
   // ── Sessions ────────────────────────────────────────────────────────────
