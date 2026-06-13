@@ -41,6 +41,7 @@
     "@prisma/client": "^6.19.1",
     "@react-email/components": "^0.1.1",
     "@react-email/html": "^0.0.11",
+    "@simplewebauthn/server": "^13.3.1",
     "@trivago/prettier-plugin-sort-imports": "^5.2.2",
     "@types/express-session": "^1.18.2",
     "@types/react": "^19.1.8",

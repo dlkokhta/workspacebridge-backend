@@ -36,6 +36,7 @@ model User {
   Session         Session[]
   passwordHistory PasswordHistory[]
   backupCodes     BackupCode[]
+  credentials     Credential[]
 
   ownedWorkspaces      Workspace[]         @relation("OwnedWorkspaces")
   workspaceMemberships WorkspaceMember[]   @relation("WorkspaceMemberships")
@@ -170,6 +171,32 @@ model BackupCode {
 
   @@index([userId])
   @@map("backup_codes")
+}
+
+model Credential {
+  id     String @id @default(uuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+
+  // Base64URL credential id reported by the authenticator (globally unique).
+  credentialId String @unique @map("credential_id")
+  // Base64URL-encoded COSE public key used to verify assertions.
+  publicKey String @map("public_key")
+  // Signature counter, for cloned-authenticator detection.
+  counter Int @default(0)
+  // Comma-joined transport hints (e.g. "internal,hybrid").
+  transports String?
+  // "singleDevice" | "multiDevice" — a multi-device credential is a syncable passkey.
+  deviceType String? @map("device_type")
+  backedUp   Boolean @default(false) @map("backed_up")
+  // Optional user-facing label, e.g. "MacBook Touch ID".
+  name String?
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  @@index([userId])
+  @@map("credentials")
 }
 
 model PasswordHistory {

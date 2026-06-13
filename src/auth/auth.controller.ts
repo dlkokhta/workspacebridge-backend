@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
   Logger,
+  Param,
   Post,
   Req,
   Res,
@@ -17,6 +19,11 @@ import { User } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { GoogleUser } from './types/google-user.type';
 import { TwoFactorAuthService } from './two-factor-auth.service';
+import { PasskeyService } from './passkey.service';
+import {
+  VerifyPasskeyAuthenticationDto,
+  VerifyPasskeyRegistrationDto,
+} from './dto/passkey.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -47,8 +54,29 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly twoFactorAuthService: TwoFactorAuthService,
+    private readonly passkeyService: PasskeyService,
     private readonly configService: ConfigService,
   ) {}
+
+  // Short-lived httpOnly cookies that carry the signed WebAuthn challenge from
+  // the "options" step to the matching "verify" step. They share the refresh
+  // cookie's cross-domain attributes (sameSite/secure) so they survive the
+  // same deployments, but live for only 5 minutes.
+  private static readonly PK_REG_COOKIE = 'pkRegChallenge';
+  private static readonly PK_AUTH_COOKIE = 'pkAuthChallenge';
+  private static readonly PK_CHALLENGE_MAX_AGE = 5 * 60 * 1000;
+
+  private setChallengeCookie(res: Response, name: string, token: string): void {
+    res.cookie(
+      name,
+      token,
+      this.getRefreshCookieOptions(AuthController.PK_CHALLENGE_MAX_AGE),
+    );
+  }
+
+  private clearChallengeCookie(res: Response, name: string): void {
+    res.clearCookie(name, this.getRefreshCookieOptions());
+  }
 
   // Centralized cookie attributes for the refresh token. Driven by env so
   // cross-domain deployments (frontend on a different eTLD+1 than the API)
@@ -427,5 +455,140 @@ export class AuthController {
 
     const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
     return rest; // { user, accessToken }
+  }
+
+  // ── Passkeys (WebAuthn / FIDO2) ─────────────────────────────────────────────
+
+  @Post('passkeys/register/options')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Begin passkey registration — returns WebAuthn creation options',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'PublicKeyCredentialCreationOptions to pass to the browser',
+  })
+  public async passkeyRegisterOptions(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const user = req.user as User;
+    const { options, challengeToken } =
+      await this.passkeyService.generateRegistrationOptions(
+        user.id,
+        user.email,
+      );
+    this.setChallengeCookie(res, AuthController.PK_REG_COOKIE, challengeToken);
+    return options;
+  }
+
+  @Post('passkeys/register/verify')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Finish passkey registration — verifies and stores the credential',
+  })
+  @ApiBody({ type: VerifyPasskeyRegistrationDto })
+  @ApiResponse({ status: 200, description: 'The newly registered passkey' })
+  @ApiResponse({ status: 400, description: 'Registration could not be verified' })
+  public async passkeyRegisterVerify(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Body() body: VerifyPasskeyRegistrationDto,
+  ) {
+    const user = req.user as User;
+    const result = await this.passkeyService.verifyRegistration(
+      user.id,
+      user.email,
+      body.response,
+      req.cookies?.[AuthController.PK_REG_COOKIE] as string | undefined,
+      body.name,
+      req.ip,
+      req.headers['user-agent'],
+    );
+    this.clearChallengeCookie(res, AuthController.PK_REG_COOKIE);
+    return result;
+  }
+
+  @Post('passkeys/login/options')
+  @HttpCode(HttpStatus.OK)
+  // Same per-IP budget as the password login route — this hands out a
+  // challenge that anyone can request, so cap it.
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({
+    summary: 'Begin passkey sign-in — returns WebAuthn request options',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'PublicKeyCredentialRequestOptions to pass to the browser',
+  })
+  public async passkeyLoginOptions(@Res({ passthrough: true }) res: Response) {
+    const { options, challengeToken } =
+      await this.passkeyService.generateAuthenticationOptions();
+    this.setChallengeCookie(res, AuthController.PK_AUTH_COOKIE, challengeToken);
+    return options;
+  }
+
+  @Post('passkeys/login/verify')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({
+    summary:
+      'Finish passkey sign-in — verifies the assertion and issues a session',
+  })
+  @ApiBody({ type: VerifyPasskeyAuthenticationDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns accessToken + sets refreshToken cookie',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Passkey not recognised or verification failed',
+  })
+  public async passkeyLoginVerify(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Body() body: VerifyPasskeyAuthenticationDto,
+  ) {
+    const result = await this.passkeyService.verifyAuthentication(
+      body.response,
+      req.cookies?.[AuthController.PK_AUTH_COOKIE] as string | undefined,
+      !!body.rememberMe,
+      req.ip,
+      req.headers['user-agent'],
+    );
+    this.clearChallengeCookie(res, AuthController.PK_AUTH_COOKIE);
+    this.setAuthCookies(res, result.refreshToken, result.rememberMe);
+
+    const { refreshToken: _rt, rememberMe: _rm, ...rest } = result;
+    return rest; // { user, accessToken }
+  }
+
+  @Get('passkeys')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'List the current user passkeys' })
+  @ApiResponse({
+    status: 200,
+    description: 'Array of the user registered passkeys',
+  })
+  public async listPasskeys(@Req() req: Request) {
+    const user = req.user as User;
+    return this.passkeyService.listPasskeys(user.id);
+  }
+
+  @Delete('passkeys/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Remove a registered passkey' })
+  @ApiResponse({ status: 200, description: 'Passkey removed' })
+  @ApiResponse({ status: 401, description: 'Passkey not found' })
+  public async removePasskey(@Param('id') id: string, @Req() req: Request) {
+    const user = req.user as User;
+    return this.passkeyService.removePasskey(
+      user.id,
+      id,
+      req.ip,
+      req.headers['user-agent'],
+    );
   }
 }

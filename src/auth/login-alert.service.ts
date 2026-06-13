@@ -19,6 +19,7 @@ export class LoginAlertService {
     'auth.login',
     'auth.google_login',
     'auth.2fa_login',
+    'auth.passkey_login',
   ];
 
   constructor(

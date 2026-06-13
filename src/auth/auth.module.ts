@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { TwoFactorAuthService } from './two-factor-auth.service';
+import { PasskeyService } from './passkey.service';
 import { CleanupService } from './cleanup.service';
 import { UserModule } from '../user/user.module';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -20,6 +21,7 @@ import { LoginAlertService } from './login-alert.service';
   providers: [
     AuthService,
     TwoFactorAuthService,
+    PasskeyService,
     CleanupService,
     PrismaService,
     JwtStrategy,

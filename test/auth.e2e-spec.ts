@@ -12,6 +12,7 @@ import * as request from 'supertest';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { TwoFactorAuthService } from '../src/auth/two-factor-auth.service';
+import { PasskeyService } from '../src/auth/passkey.service';
 
 const VALID_SIGNUP = {
   firstname: 'John',
@@ -43,6 +44,15 @@ const mockTwoFactorAuthService = {
   verifyTwoFactorForLogin: jest.fn(),
 };
 
+const mockPasskeyService = {
+  generateRegistrationOptions: jest.fn(),
+  verifyRegistration: jest.fn(),
+  generateAuthenticationOptions: jest.fn(),
+  verifyAuthentication: jest.fn(),
+  listPasskeys: jest.fn(),
+  removePasskey: jest.fn(),
+};
+
 describe('AuthController (e2e)', () => {
   let app: INestApplication;
 
@@ -52,6 +62,7 @@ describe('AuthController (e2e)', () => {
       providers: [
         { provide: AuthService, useValue: mockAuthService },
         { provide: TwoFactorAuthService, useValue: mockTwoFactorAuthService },
+        { provide: PasskeyService, useValue: mockPasskeyService },
         {
           provide: ConfigService,
           useValue: { get: jest.fn(), getOrThrow: jest.fn() },
@@ -532,6 +543,38 @@ describe('AuthController (e2e)', () => {
         .expect(200);
 
       expect(res.body.message).toContain('Password reset successfully');
+    });
+  });
+
+  describe('POST /auth/passkeys/login/options', () => {
+    it('returns WebAuthn request options and sets the challenge cookie', async () => {
+      mockPasskeyService.generateAuthenticationOptions.mockResolvedValue({
+        options: { challenge: 'chal-auth', rpId: 'localhost' },
+        challengeToken: 'signed-challenge',
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/passkeys/login/options')
+        .expect(200);
+
+      expect(res.body.challenge).toBe('chal-auth');
+      const cookies = res.headers['set-cookie'] as unknown as string[];
+      expect(
+        cookies.some((c) => c.startsWith('pkAuthChallenge=')),
+      ).toBe(true);
+    });
+  });
+
+  describe('POST /auth/passkeys/login/verify', () => {
+    it('returns 401 when the assertion cannot be verified', () => {
+      mockPasskeyService.verifyAuthentication.mockRejectedValue(
+        new UnauthorizedException('Passkey verification failed'),
+      );
+
+      return request(app.getHttpServer())
+        .post('/auth/passkeys/login/verify')
+        .send({ response: { id: 'cred-x' } })
+        .expect(401);
     });
   });
 });
