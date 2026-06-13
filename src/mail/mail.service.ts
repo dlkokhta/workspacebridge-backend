@@ -332,6 +332,151 @@ export class MailService {
     `.trim();
   }
 
+  // Sent to the NEW address when a user requests an email change. The account
+  // email isn't switched until this link is confirmed.
+  async sendEmailChangeVerification(newEmail: string, token: string) {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL');
+    const confirmUrl = `${frontendUrl}/auth/confirm-email-change?token=${token}`;
+    const from =
+      this.configService.get<string>('RESEND_FROM_EMAIL') ??
+      'noreply@example.com';
+
+    await this.resend.emails.send({
+      from,
+      to: newEmail,
+      subject: 'Confirm your new email address',
+      html: this.buildEmailChangeVerification(confirmUrl),
+    });
+  }
+
+  private buildEmailChangeVerification(confirmUrl: string): string {
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Confirm your new email</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="520" cellpadding="0" cellspacing="0"
+          style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:#5a8a6b;padding:32px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:0.5px;">
+                Confirm your new email address
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:36px 40px;">
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                You asked to change the email address on your WorkspaceBridge account.
+                Click the button below to confirm this is your address. This link
+                expires in <strong>1 hour</strong>.
+              </p>
+              <div style="text-align:center;margin:32px 0;">
+                <a href="${confirmUrl}"
+                  style="background:#5a8a6b;color:#ffffff;text-decoration:none;
+                         padding:14px 32px;border-radius:6px;font-size:15px;
+                         font-weight:600;display:inline-block;">
+                  Confirm New Email
+                </a>
+              </div>
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                If you didn't request this change, you can safely ignore this email —
+                your account email will stay the same.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                If the button doesn't work, copy and paste this link into your browser:<br/>
+                <a href="${confirmUrl}" style="color:#5a8a6b;word-break:break-all;">${confirmUrl}</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
+  // Sent to the OLD address after an email change completes — the only mailbox
+  // the original owner still controls, so a hijacked change can be spotted.
+  async sendEmailChangedAlert(oldEmail: string, newEmail: string) {
+    const from =
+      this.configService.get<string>('RESEND_FROM_EMAIL') ??
+      'noreply@example.com';
+
+    await this.resend.emails.send({
+      from,
+      to: oldEmail,
+      subject: 'Your email address was changed',
+      html: this.buildEmailChangedAlert(oldEmail, newEmail),
+    });
+  }
+
+  private buildEmailChangedAlert(oldEmail: string, newEmail: string): string {
+    const frontendUrl = this.configService.get<string>('FRONTEND_URL') ?? '';
+    const resetUrl = `${frontendUrl}/passwordRecovery`;
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Your email address was changed</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="520" cellpadding="0" cellspacing="0"
+          style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background:#5a8a6b;padding:32px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:0.5px;">
+                Your email address was changed
+              </h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:36px 40px;">
+              <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">
+                The email address on your WorkspaceBridge account was changed from
+                <strong>${oldEmail}</strong> to <strong>${newEmail}</strong>.
+              </p>
+              <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+                If you made this change, no action is needed. If you didn't,
+                <a href="${resetUrl}" style="color:#5a8a6b;">reset your password</a>
+                immediately and contact support — someone may have access to your account.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+              <p style="margin:0;color:#9ca3af;font-size:12px;">
+                This is a security notification from WorkspaceBridge.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
   async sendNotificationEmail({
     to,
     heading,

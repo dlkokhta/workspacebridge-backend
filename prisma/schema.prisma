@@ -83,6 +83,10 @@ model Token {
   expiresIn DateTime  @map("expires_in")
   createdAt DateTime  @default(now()) @map("created_at")
 
+  // Set for EMAIL_CHANGE tokens: the user requesting the change. `email` then
+  // holds the pending NEW address; the current address is read from the user.
+  userId String? @map("user_id")
+
   @@index([email, type])
   @@index([expiresIn])
   @@map("tokens")
@@ -570,6 +574,7 @@ enum TokenType {
   VERIFICATION
   TWO_FACTOR
   PASSWORD_RESET
+  EMAIL_CHANGE
 }
 
 enum WhiteboardVersionType {

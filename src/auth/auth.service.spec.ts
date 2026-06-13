@@ -10,6 +10,7 @@ import { PasswordHistoryService } from '../libs/common/services/password-history
 import { LoginAlertService } from './login-alert.service';
 import {
   BadRequestException,
+  ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
@@ -88,6 +89,8 @@ const mockMailService = {
   sendVerificationEmail: jest.fn(),
   sendPasswordResetEmail: jest.fn(),
   sendAccountExistsEmail: jest.fn().mockResolvedValue(undefined),
+  sendEmailChangeVerification: jest.fn().mockResolvedValue(undefined),
+  sendEmailChangedAlert: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockPasswordBreachService = {
@@ -911,6 +914,135 @@ describe('AuthService', () => {
       );
       expect(mockPrismaService.$transaction).toHaveBeenCalled();
       expect(result.message).toContain('Password reset successfully');
+    });
+  });
+
+  // ─── requestEmailChange ───────────────────────────────────────────────────────
+
+  describe('requestEmailChange', () => {
+    it('rejects when the password is incorrect', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'user-123',
+        email: 'john@example.com',
+        password: 'old-hash',
+      });
+      mockedVerify.mockResolvedValue(false);
+
+      await expect(
+        service.requestEmailChange('user-123', 'new@example.com', 'wrong'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockMailService.sendEmailChangeVerification).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the new email is already in use', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'user-123',
+        email: 'john@example.com',
+        password: 'old-hash',
+      });
+      mockedVerify.mockResolvedValue(true);
+      mockUserService.findByEmail.mockResolvedValue({ id: 'someone-else' });
+
+      await expect(
+        service.requestEmailChange('user-123', 'taken@example.com', 'correct'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockMailService.sendEmailChangeVerification).not.toHaveBeenCalled();
+    });
+
+    it('stores a hashed EMAIL_CHANGE token for the new address and emails it', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'user-123',
+        email: 'john@example.com',
+        password: 'old-hash',
+      });
+      mockedVerify.mockResolvedValue(true);
+      mockUserService.findByEmail.mockResolvedValue(null);
+      mockPrismaService.token.deleteMany.mockResolvedValue({});
+      mockPrismaService.token.create.mockResolvedValue({});
+
+      const result = await service.requestEmailChange(
+        'user-123',
+        'new@example.com',
+        'correct',
+      );
+
+      const created = mockPrismaService.token.create.mock.calls[0][0] as {
+        data: { token: string; type: string; email: string; userId: string };
+      };
+      const emailedToken = mockMailService.sendEmailChangeVerification.mock
+        .calls[0][1] as string;
+      expect(created.data.type).toBe('EMAIL_CHANGE');
+      expect(created.data.email).toBe('new@example.com');
+      expect(created.data.userId).toBe('user-123');
+      expect(created.data.token).toBe(sha256(emailedToken));
+      expect(created.data.token).not.toBe(emailedToken);
+      expect(result.message).toContain('confirmation link has been sent');
+    });
+  });
+
+  // ─── confirmEmailChange ───────────────────────────────────────────────────────
+
+  describe('confirmEmailChange', () => {
+    it('rejects a token that is not an EMAIL_CHANGE token', async () => {
+      mockPrismaService.token.findUnique.mockResolvedValue({
+        type: 'VERIFICATION',
+        email: 'new@example.com',
+        userId: 'user-123',
+        expiresIn: new Date(Date.now() + 10000),
+      });
+
+      await expect(service.confirmEmailChange('tok')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('switches the email, alerts the old address, and consumes the token', async () => {
+      mockPrismaService.token.findUnique.mockResolvedValue({
+        type: 'EMAIL_CHANGE',
+        email: 'new@example.com',
+        userId: 'user-123',
+        expiresIn: new Date(Date.now() + 10000),
+      });
+      mockPrismaService.user.findUnique
+        .mockResolvedValueOnce({ id: 'user-123', email: 'john@example.com' }) // by id
+        .mockResolvedValueOnce(null); // new email not taken
+      mockPrismaService.user.update.mockResolvedValue({});
+      mockPrismaService.token.delete.mockResolvedValue({});
+
+      const result = await service.confirmEmailChange('tok');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-123' },
+        data: { email: 'new@example.com' },
+      });
+      expect(mockMailService.sendEmailChangedAlert).toHaveBeenCalledWith(
+        'john@example.com',
+        'new@example.com',
+      );
+      expect(mockPrismaService.token.delete).toHaveBeenCalledWith({
+        where: { token: sha256('tok') },
+      });
+      expect(result.message).toContain('updated successfully');
+    });
+
+    it('rejects when the new address was taken since the request', async () => {
+      mockPrismaService.token.findUnique.mockResolvedValue({
+        type: 'EMAIL_CHANGE',
+        email: 'new@example.com',
+        userId: 'user-123',
+        expiresIn: new Date(Date.now() + 10000),
+      });
+      mockPrismaService.user.findUnique
+        .mockResolvedValueOnce({ id: 'user-123', email: 'john@example.com' })
+        .mockResolvedValueOnce({ id: 'other-user' }); // new email now taken
+      mockPrismaService.token.delete.mockResolvedValue({});
+
+      await expect(service.confirmEmailChange('tok')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -36,6 +36,8 @@ const mockAuthService = {
   resendVerification: jest.fn(),
   forgotPassword: jest.fn(),
   resetPassword: jest.fn(),
+  requestEmailChange: jest.fn(),
+  confirmEmailChange: jest.fn(),
 };
 
 const mockTwoFactorAuthService = {
@@ -421,6 +423,32 @@ describe('AuthController (e2e)', () => {
       expect(mockAuthService.resendVerification).toHaveBeenCalledWith(
         'john@example.com',
       );
+    });
+  });
+
+  // ─── GET /auth/confirm-email-change ──────────────────────────────────────────
+
+  describe('GET /auth/confirm-email-change', () => {
+    it('returns 400 for an invalid or expired link', () => {
+      mockAuthService.confirmEmailChange.mockRejectedValue(
+        new BadRequestException('Invalid email change link'),
+      );
+      return request(app.getHttpServer())
+        .get('/auth/confirm-email-change?token=bad')
+        .expect(400);
+    });
+
+    it('returns 200 when the change is confirmed', async () => {
+      mockAuthService.confirmEmailChange.mockResolvedValue({
+        message: 'Your email address has been updated successfully.',
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/auth/confirm-email-change?token=good')
+        .expect(200);
+
+      expect(res.body.message).toContain('updated successfully');
+      expect(mockAuthService.confirmEmailChange).toHaveBeenCalledWith('good');
     });
   });
 

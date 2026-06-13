@@ -907,4 +907,135 @@ export class AuthService {
       message: 'Password reset successfully. You can now log in with your new password.',
     };
   }
+
+  // ── Email change (with re-verification of the new address) ────────────────────
+
+  /**
+   * Starts an email change: re-confirms the user's password, ensures the new
+   * address is free, and emails a confirmation link to the NEW address. The
+   * account email isn't touched until that link is confirmed, proving the user
+   * controls the new mailbox.
+   */
+  async requestEmailChange(userId: string, newEmail: string, password: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (!user.password) {
+      throw new BadRequestException(
+        'Set a password before changing your email address.',
+      );
+    }
+
+    const isValid = await argon2.verify(user.password, password);
+    if (!isValid) {
+      throw new UnauthorizedException('Password is incorrect');
+    }
+
+    if (newEmail === user.email) {
+      throw new BadRequestException('That is already your email address.');
+    }
+
+    const taken = await this.userService.findByEmail(newEmail);
+    if (taken) {
+      throw new ConflictException('That email address is already in use.');
+    }
+
+    // Drop any earlier pending change for this user, then issue a fresh token.
+    await this.prismaService.token.deleteMany({
+      where: { userId, type: 'EMAIL_CHANGE' },
+    });
+
+    const token = randomUUID();
+    await this.prismaService.token.create({
+      data: {
+        email: newEmail, // the pending NEW address
+        token: this.hashToken(token),
+        type: 'EMAIL_CHANGE',
+        userId,
+        expiresIn: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+      },
+    });
+
+    // Link goes to the new address; the DB only holds its hash.
+    await this.mailService.sendEmailChangeVerification(newEmail, token);
+
+    this.auditAuthEvent('auth.email_change_requested', userId, {
+      email: user.email,
+      newEmail,
+    });
+
+    return {
+      message:
+        'A confirmation link has been sent to your new email address. The change takes effect once you confirm it.',
+    };
+  }
+
+  /**
+   * Completes an email change from the confirmation link. Re-checks that the
+   * new address is still free (it could have been taken since the request),
+   * switches the account email, and alerts the OLD address that it changed.
+   */
+  async confirmEmailChange(token: string) {
+    const hashedToken = this.hashToken(token);
+    const record = await this.prismaService.token.findUnique({
+      where: { token: hashedToken },
+    });
+
+    if (!record || record.type !== 'EMAIL_CHANGE' || !record.userId) {
+      throw new BadRequestException('Invalid email change link');
+    }
+
+    if (new Date() > record.expiresIn) {
+      await this.prismaService.token.delete({ where: { token: hashedToken } });
+      throw new BadRequestException(
+        'This email change link has expired. Please request a new one.',
+      );
+    }
+
+    const user = await this.prismaService.user.findUnique({
+      where: { id: record.userId },
+    });
+    if (!user) {
+      await this.prismaService.token.delete({ where: { token: hashedToken } });
+      throw new BadRequestException('Account not found');
+    }
+
+    const newEmail = record.email;
+    const oldEmail = user.email;
+
+    if (oldEmail !== newEmail) {
+      const taken = await this.prismaService.user.findUnique({
+        where: { email: newEmail },
+      });
+      if (taken && taken.id !== user.id) {
+        await this.prismaService.token.delete({ where: { token: hashedToken } });
+        throw new ConflictException('That email address is now in use.');
+      }
+
+      await this.prismaService.user.update({
+        where: { id: user.id },
+        data: { email: newEmail },
+      });
+
+      // Tell the OLD address — the only mailbox the original owner still
+      // controls — so a hijacked change is noticed. Fire-and-forget: an
+      // alert failure must not undo a completed change.
+      void this.mailService
+        .sendEmailChangedAlert(oldEmail, newEmail)
+        .catch((err) =>
+          this.logger.error('Failed to send email-changed alert', err),
+        );
+
+      this.auditAuthEvent('auth.email_changed', user.id, {
+        from: oldEmail,
+        to: newEmail,
+      });
+    }
+
+    await this.prismaService.token.delete({ where: { token: hashedToken } });
+
+    return { message: 'Your email address has been updated successfully.' };
+  }
 }

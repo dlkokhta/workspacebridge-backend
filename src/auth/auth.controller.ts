@@ -29,6 +29,7 @@ import { LoginUserDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
+import { ChangeEmailDto } from './dto/change-email.dto';
 import {
   DisableTwoFactorDto,
   TwoFactorCodeDto,
@@ -379,6 +380,38 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many attempts. Please try again later.' })
   public async resetPassword(@Body() body: ResetPasswordDto) {
     return this.authService.resetPassword(body.token, body.password);
+  }
+
+  @Post('change-email')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  // Each request sends an email to a user-supplied address; cap it.
+  @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @ApiOperation({
+    summary: 'Request an email change (sends confirmation to the new address)',
+  })
+  @ApiBody({ type: ChangeEmailDto })
+  @ApiResponse({ status: 200, description: 'Confirmation link sent to the new email' })
+  @ApiResponse({ status: 401, description: 'Password is incorrect' })
+  @ApiResponse({ status: 409, description: 'New email already in use' })
+  public async changeEmail(@Req() req: Request, @Body() body: ChangeEmailDto) {
+    const user = req.user as User;
+    return this.authService.requestEmailChange(
+      user.id,
+      body.newEmail,
+      body.password,
+    );
+  }
+
+  @Get('confirm-email-change')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 60000, limit: 10 } })
+  @ApiOperation({ summary: 'Confirm an email change from the emailed link' })
+  @ApiQuery({ name: 'token', required: true })
+  @ApiResponse({ status: 200, description: 'Email address updated' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired link' })
+  public async confirmEmailChange(@Query('token') token: string) {
+    return this.authService.confirmEmailChange(token);
   }
 
   // ── Two-Factor Authentication ──────────────────────────────────────────────
