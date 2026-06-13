@@ -33,6 +33,7 @@ const mockAuthService = {
   refresh: jest.fn(),
   logout: jest.fn(),
   verifyEmail: jest.fn(),
+  resendVerification: jest.fn(),
   forgotPassword: jest.fn(),
   resetPassword: jest.fn(),
 };
@@ -392,6 +393,34 @@ describe('AuthController (e2e)', () => {
         .expect(200);
 
       expect(res.body.message).toContain('Email verified');
+    });
+  });
+
+  // ─── POST /auth/resend-verification ──────────────────────────────────────────
+
+  describe('POST /auth/resend-verification', () => {
+    it('returns 400 when the email is missing or invalid', () => {
+      return request(app.getHttpServer())
+        .post('/auth/resend-verification')
+        .send({ email: 'not-an-email' })
+        .expect(400);
+    });
+
+    it('returns 200 with the generic message for any valid email', async () => {
+      mockAuthService.resendVerification.mockResolvedValue({
+        message:
+          'If an account with this email exists and is unverified, a new verification link has been sent.',
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/auth/resend-verification')
+        .send({ email: 'john@example.com' })
+        .expect(200);
+
+      expect(res.body.message).toContain('a new verification link has been sent');
+      expect(mockAuthService.resendVerification).toHaveBeenCalledWith(
+        'john@example.com',
+      );
     });
   });
 

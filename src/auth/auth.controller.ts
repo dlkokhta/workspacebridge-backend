@@ -28,6 +28,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ResendVerificationDto } from './dto/resend-verification.dto';
 import {
   DisableTwoFactorDto,
   TwoFactorCodeDto,
@@ -337,6 +338,22 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many attempts. Please try again later.' })
   public async verifyEmail(@Query('token') token: string) {
     return this.authService.verifyEmail(token);
+  }
+
+  @Post('resend-verification')
+  @HttpCode(HttpStatus.OK)
+  // Sends an email to whatever address is supplied; same generous cap as
+  // forgot-password (3 per 15 min per IP) to curb bulk probing/mail abuse.
+  @Throttle({ default: { ttl: 900000, limit: 3 } })
+  @ApiOperation({ summary: 'Resend the email verification link' })
+  @ApiBody({ type: ResendVerificationDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Verification email sent if the account exists and is unverified',
+  })
+  @ApiResponse({ status: 429, description: 'Too many attempts. Please try again later.' })
+  public async resendVerification(@Body() body: ResendVerificationDto) {
+    return this.authService.resendVerification(body.email);
   }
 
   @Post('forgot-password')

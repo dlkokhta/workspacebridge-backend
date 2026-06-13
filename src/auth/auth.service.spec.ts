@@ -13,6 +13,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { createHash } from 'crypto';
+
+const sha256 = (value: string): string =>
+  createHash('sha256').update(value).digest('hex');
 
 jest.mock('argon2');
 
@@ -279,11 +283,82 @@ describe('AuthService', () => {
 
       const result = await service.verifyEmail('valid-token');
 
+      // The plaintext token from the link is hashed before the DB lookup —
+      // only the hash is ever stored.
+      expect(mockPrismaService.token.findUnique).toHaveBeenCalledWith({
+        where: { token: sha256('valid-token') },
+      });
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { email: 'john@example.com' },
         data: { isVerified: true },
       });
       expect(result.message).toContain('Email verified');
+    });
+  });
+
+  // ─── resendVerification ───────────────────────────────────────────────────────
+
+  describe('resendVerification', () => {
+    const safeMessage =
+      'If an account with this email exists and is unverified, a new verification link has been sent.';
+
+    it('returns the safe message and sends nothing for an unknown email', async () => {
+      mockUserService.findByEmail.mockResolvedValue(null);
+
+      const result = await service.resendVerification('unknown@example.com');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result.message).toBe(safeMessage);
+      expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
+      expect(mockPrismaService.token.create).not.toHaveBeenCalled();
+    });
+
+    it('skips an already-verified account but still returns the safe message', async () => {
+      mockUserService.findByEmail.mockResolvedValue(fakeUser); // isVerified: true
+
+      const result = await service.resendVerification('john@example.com');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result.message).toBe(safeMessage);
+      expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('skips a Google account (no password to verify)', async () => {
+      mockUserService.findByEmail.mockResolvedValue({
+        ...fakeUser,
+        isVerified: false,
+        method: 'GOOGLE',
+      });
+
+      const result = await service.resendVerification('john@example.com');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result.message).toBe(safeMessage);
+      expect(mockMailService.sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('creates a fresh token (stored hashed) and emails an unverified user', async () => {
+      mockUserService.findByEmail.mockResolvedValue({
+        ...fakeUser,
+        isVerified: false,
+      });
+      mockPrismaService.token.deleteMany.mockResolvedValue({});
+      mockPrismaService.token.create.mockResolvedValue({});
+      mockMailService.sendVerificationEmail.mockResolvedValue(undefined);
+
+      const result = await service.resendVerification('john@example.com');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(result.message).toBe(safeMessage);
+      // The DB stores the hash; the email carries the matching plaintext.
+      const created = mockPrismaService.token.create.mock.calls[0][0] as {
+        data: { token: string; type: string };
+      };
+      const emailedToken = mockMailService.sendVerificationEmail.mock
+        .calls[0][1] as string;
+      expect(created.data.type).toBe('VERIFICATION');
+      expect(created.data.token).toBe(sha256(emailedToken));
+      expect(created.data.token).not.toBe(emailedToken);
     });
   });
 
@@ -827,7 +902,7 @@ describe('AuthService', () => {
         'old-hash',
       );
       expect(mockPrismaService.token.delete).toHaveBeenCalledWith({
-        where: { token: 'valid-token' },
+        where: { token: sha256('valid-token') },
       });
       expect(mockedHash).toHaveBeenCalledWith('newPass123');
       expect(mockPasswordHistoryService.record).toHaveBeenCalledWith(

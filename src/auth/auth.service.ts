@@ -16,7 +16,7 @@ import * as argon2 from 'argon2';
 import { GoogleRegisterDto } from './dto/google-register.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { MailService } from '../mail/mail.service';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import { GoogleUser } from './types/google-user.type';
 import { Prisma, UserStatus } from '@prisma/client';
@@ -276,6 +276,15 @@ export class AuthService {
 
   // ── Token helpers ──────────────────────────────────────────────────────────
 
+  // One-time email tokens (verification, password reset) are sent to the user
+  // in plaintext but stored only as a SHA-256 hash. A DB read then can't be
+  // replayed as a live token. SHA-256 (not argon2) is enough: the input is a
+  // random UUID, so the hash is already infeasible to brute-force — same
+  // rationale as the 2FA backup codes.
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
   private async createVerificationToken(email: string): Promise<string> {
     // Remove any existing verification token for this email
     await this.prismaService.token.deleteMany({
@@ -286,18 +295,21 @@ export class AuthService {
     await this.prismaService.token.create({
       data: {
         email,
-        token,
+        token: this.hashToken(token),
         type: 'VERIFICATION',
         expiresIn: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
       },
     });
 
+    // Return the plaintext token — the only place it ever exists outside the
+    // user's inbox.
     return token;
   }
 
   async verifyEmail(token: string) {
+    const hashedToken = this.hashToken(token);
     const record = await this.prismaService.token.findUnique({
-      where: { token },
+      where: { token: hashedToken },
     });
 
     if (!record || record.type !== 'VERIFICATION') {
@@ -305,7 +317,7 @@ export class AuthService {
     }
 
     if (new Date() > record.expiresIn) {
-      await this.prismaService.token.delete({ where: { token } });
+      await this.prismaService.token.delete({ where: { token: hashedToken } });
       throw new BadRequestException('Verification token has expired. Please register again.');
     }
 
@@ -314,9 +326,39 @@ export class AuthService {
       data: { isVerified: true },
     });
 
-    await this.prismaService.token.delete({ where: { token } });
+    await this.prismaService.token.delete({ where: { token: hashedToken } });
 
     return { message: 'Email verified successfully. You can now log in.' };
+  }
+
+  private static readonly RESEND_VERIFICATION_MESSAGE =
+    'If an account with this email exists and is unverified, a new verification link has been sent.';
+
+  async resendVerification(email: string) {
+    // Identical response for every case + the real work runs asynchronously,
+    // so neither the message nor the timing reveals whether the account
+    // exists, is already verified, or is a Google account (no enumeration).
+    // Same pattern as forgotPassword.
+    void this.processResendVerificationWork(email).catch((err) => {
+      this.logger.error('Resend-verification background work failed', err);
+    });
+
+    return { message: AuthService.RESEND_VERIFICATION_MESSAGE };
+  }
+
+  private async processResendVerificationWork(email: string): Promise<void> {
+    const user = await this.userService.findByEmail(email);
+
+    // Skip silently for unknown, already-verified, or Google (no password,
+    // email verified by Google) accounts — none of them need a link.
+    if (!user || user.isVerified || user.method === 'GOOGLE') return;
+
+    const token = await this.createVerificationToken(user.email);
+    await this.mailService.sendVerificationEmail(user.email, token);
+
+    this.auditAuthEvent('auth.verification_resent', user.id, {
+      email: user.email,
+    });
   }
 
   //google user login
@@ -792,12 +834,13 @@ export class AuthService {
     await this.prismaService.token.create({
       data: {
         email,
-        token,
+        token: this.hashToken(token),
         type: 'PASSWORD_RESET',
         expiresIn: new Date(Date.now() + 1 * 60 * 60 * 1000), // 1 hour
       },
     });
 
+    // Email carries the plaintext token; only its hash lives in the DB.
     await this.mailService.sendPasswordResetEmail(email, token);
   }
 
@@ -807,8 +850,9 @@ export class AuthService {
     // single-use token, so the user can retry from the same reset link.
     await this.assertPasswordNotBreached(password);
 
+    const hashedToken = this.hashToken(token);
     const record = await this.prismaService.token.findUnique({
-      where: { token },
+      where: { token: hashedToken },
       select: { email: true, expiresIn: true },
     });
     if (!record) {
@@ -840,7 +884,7 @@ export class AuthService {
     // concurrent requests race on this delete — exactly one reaches the
     // password write below.
     try {
-      await this.prismaService.token.delete({ where: { token } });
+      await this.prismaService.token.delete({ where: { token: hashedToken } });
     } catch {
       throw new BadRequestException('Invalid or expired reset token');
     }
