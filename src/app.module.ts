@@ -5,6 +5,7 @@ import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
 import { validateEnv } from './config/env.validation';
 import { GlobalExceptionFilter } from './libs/common/filters/global-exception.filter';
+import { genRequestId } from './libs/common/utils/request-id';
 import { AuthModule } from './auth/auth.module';
 import { IS_DEV_ENV } from './libs/common/utils/is-dev.utils';
 import { UserModule } from './user/user.module';
@@ -52,6 +53,9 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     ScheduleModule.forRoot(),
     LoggerModule.forRoot({
       pinoHttp: {
+        // Per-request correlation id: reuse a valid inbound X-Request-Id or
+        // mint a UUID, echo it on the response, and tag every log line with it.
+        genReqId: genRequestId,
         transport:
           process.env.NODE_ENV !== 'production'
             ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
