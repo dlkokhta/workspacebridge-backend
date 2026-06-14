@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
 import { validateEnv } from './config/env.validation';
+import { GlobalExceptionFilter } from './libs/common/filters/global-exception.filter';
 import { AuthModule } from './auth/auth.module';
 import { IS_DEV_ENV } from './libs/common/utils/is-dev.utils';
 import { UserModule } from './user/user.module';
@@ -23,7 +24,7 @@ import { NotificationModule } from './notification/notification.module';
 import { SearchModule } from './search/search.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { Injectable } from '@nestjs/common';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -83,6 +84,10 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     {
       provide: APP_GUARD,
       useClass: CustomThrottlerGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: GlobalExceptionFilter,
     },
   ],
 })
