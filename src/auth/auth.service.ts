@@ -18,7 +18,9 @@ import { MailService } from '../mail/mail.service';
 import { createHash, randomUUID } from 'crypto';
 import { JwtPayload } from './types/jwt-payload.type';
 import { GoogleUser } from './types/google-user.type';
-import { Prisma, UserStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
+import { AuditAction } from '../libs/common/audit/audit-actions';
+import { writeAuditLog } from '../libs/common/audit/audit-log.util';
 import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
@@ -144,30 +146,15 @@ export class AuthService {
     return { attempts, locked };
   }
 
-  // Fire-and-forget audit write — an audit failure must never break the
-  // login path itself; it is logged server-side and dropped. ip/userAgent
-  // travel in metadata until the AuditLog model grows dedicated columns.
+  // Fire-and-forget audit write — an audit failure must never break the login
+  // path itself; it is logged server-side and dropped. email/ip/userAgent are
+  // lifted into dedicated AuditLog columns by writeAuditLog.
   private auditAuthEvent(
-    action: string,
+    action: AuditAction,
     userId: string,
     metadata: Record<string, unknown>,
   ): void {
-    // JSON round-trip strips undefined values, which Prisma's JSON input
-    // rejects (ip/userAgent are optional).
-    const cleanMetadata = JSON.parse(
-      JSON.stringify(metadata),
-    ) as Prisma.InputJsonValue;
-    void Promise.resolve(
-      this.prismaService.auditLog.create({
-        data: {
-          action,
-          targetType: 'user',
-          targetId: userId,
-          actorId: userId,
-          metadata: cleanMetadata,
-        },
-      }),
-    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
+    writeAuditLog(this.prismaService, this.logger, action, userId, metadata);
   }
 
   // ── OAuth exchange code (avoid token-in-URL after Google redirect) ────────

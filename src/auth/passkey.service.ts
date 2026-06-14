@@ -20,7 +20,9 @@ import {
   type VerifiedRegistrationResponse,
   type VerifiedAuthenticationResponse,
 } from '@simplewebauthn/server';
-import { Prisma, User, UserStatus } from '@prisma/client';
+import { User, UserStatus } from '@prisma/client';
+import { AuditAction } from '../libs/common/audit/audit-actions';
+import { writeAuditLog } from '../libs/common/audit/audit-log.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginAlertService } from './login-alert.service';
 import { DEFAULT_SESSION_TTL_MS, REMEMBER_ME_TTL_MS } from './auth.constants';
@@ -407,28 +409,12 @@ export class PasskeyService {
     return { user: userSafe, accessToken, refreshToken, rememberMe };
   }
 
-  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent:
-  // an audit failure is logged server-side and dropped, never thrown.
+  // Fire-and-forget audit write; email/ip/userAgent land in dedicated columns.
   private audit(
-    action: string,
+    action: AuditAction,
     userId: string,
     metadata: Record<string, unknown>,
   ): void {
-    // JSON round-trip strips undefined values, which Prisma's JSON input
-    // rejects (ip/userAgent are optional).
-    const cleanMetadata = JSON.parse(
-      JSON.stringify(metadata),
-    ) as Prisma.InputJsonValue;
-    void Promise.resolve(
-      this.prismaService.auditLog.create({
-        data: {
-          action,
-          targetType: 'user',
-          targetId: userId,
-          actorId: userId,
-          metadata: cleanMetadata,
-        },
-      }),
-    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
+    writeAuditLog(this.prismaService, this.logger, action, userId, metadata);
   }
 }

@@ -108,14 +108,14 @@ describe('LoginAlertService', () => {
       await service.handleSuccessfulLogin('auth.login', params);
 
       expect(mockMailService.sendNewDeviceAlertEmail).not.toHaveBeenCalled();
+      // email/ip/userAgent now live in dedicated columns, not metadata.
       expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith({
         data: containing({
           action: 'auth.login',
           actorId: 'user-1',
-          metadata: containing({
-            userAgent: params.userAgent,
-            ip: '1.2.3.4',
-          }),
+          email: 'a@b.com',
+          ip: '1.2.3.4',
+          userAgent: params.userAgent,
         }),
       });
       // the check ran before the write was issued
@@ -126,16 +126,29 @@ describe('LoginAlertService', () => {
       );
     });
 
-    it('strips undefined ip/userAgent from the audit metadata', async () => {
+    it('writes provided context as columns and omits undefined ip/userAgent', async () => {
       await service.handleSuccessfulLogin('auth.login', {
         userId: 'user-1',
         email: 'a@b.com',
       });
 
       const calls = mockPrismaService.auditLog.create.mock.calls as [
-        [{ data: { metadata: unknown } }],
+        [
+          {
+            data: {
+              email?: string;
+              ip?: string;
+              userAgent?: string;
+              metadata?: unknown;
+            };
+          },
+        ],
       ];
-      expect(calls[0][0].data.metadata).toEqual({ email: 'a@b.com' });
+      const { data } = calls[0][0];
+      expect(data.email).toBe('a@b.com');
+      expect(data.ip).toBeUndefined();
+      expect(data.userAgent).toBeUndefined();
+      expect(data.metadata).toBeUndefined();
     });
   });
 });

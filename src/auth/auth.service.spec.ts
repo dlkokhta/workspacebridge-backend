@@ -425,9 +425,9 @@ describe('AuthService', () => {
         data: expect.objectContaining({
           action: 'auth.login_failed',
           targetId: 'user-123',
+          ip: '1.2.3.4',
           metadata: expect.objectContaining({
             reason: 'account_locked',
-            ip: '1.2.3.4',
           }),
         }),
       });

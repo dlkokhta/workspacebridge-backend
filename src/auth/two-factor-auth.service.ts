@@ -16,7 +16,9 @@ import {
   decryptSecret,
   encryptSecret,
 } from '../libs/common/utils/secret-crypto';
-import { Prisma, UserStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
+import { AuditAction } from '../libs/common/audit/audit-actions';
+import { writeAuditLog } from '../libs/common/audit/audit-log.util';
 import {
   DEFAULT_SESSION_TTL_MS,
   REMEMBER_ME_TTL_MS,
@@ -116,26 +118,13 @@ export class TwoFactorAuthService {
     return { backupCodes: plainCodes };
   }
 
-  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent.
+  // Fire-and-forget audit write; email/ip/userAgent land in dedicated columns.
   private audit(
-    action: string,
+    action: AuditAction,
     userId: string,
     metadata: Record<string, unknown>,
   ): void {
-    const cleanMetadata = JSON.parse(
-      JSON.stringify(metadata),
-    ) as Prisma.InputJsonValue;
-    void Promise.resolve(
-      this.prismaService.auditLog.create({
-        data: {
-          action,
-          targetType: 'user',
-          targetId: userId,
-          actorId: userId,
-          metadata: cleanMetadata,
-        },
-      }),
-    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
+    writeAuditLog(this.prismaService, this.logger, action, userId, metadata);
   }
 
   async generateAndStoreSecret(userId: string, email: string) {

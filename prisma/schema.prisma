@@ -518,11 +518,21 @@ model AuditLog {
   targetType String   @map("target_type")
   targetId   String   @map("target_id")
   actorId    String   @map("actor_id")
-  metadata   Json?
-  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Dedicated columns for the common security context, lifted out of the
+  // metadata JSON so they can be indexed/queried (e.g. device history, search
+  // by email). Nullable — not every event carries all three.
+  email     String?
+  ip        String?
+  userAgent String? @map("user_agent")
+
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([createdAt])
   @@index([actorId])
+  @@index([actorId, action])
+  @@index([email])
   @@index([targetType, targetId])
   @@map("audit_logs")
 }

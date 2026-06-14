@@ -17,6 +17,8 @@ import { JwtPayload } from '../auth/types/jwt-payload.type';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 import { MailService } from '../mail/mail.service';
+import { AuditAction } from '../libs/common/audit/audit-actions';
+import { writeAuditLog } from '../libs/common/audit/audit-log.util';
 
 @Injectable()
 export class UserService {
@@ -486,26 +488,13 @@ export class UserService {
     return { message: `${provider} disconnected` };
   }
 
-  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent.
+  // Fire-and-forget audit write; email/ip/userAgent land in dedicated columns.
   private audit(
-    action: string,
+    action: AuditAction,
     userId: string,
     metadata: Record<string, unknown>,
   ): void {
-    const cleanMetadata = JSON.parse(
-      JSON.stringify(metadata),
-    ) as Prisma.InputJsonValue;
-    void Promise.resolve(
-      this.prismaService.auditLog.create({
-        data: {
-          action,
-          targetType: 'user',
-          targetId: userId,
-          actorId: userId,
-          metadata: cleanMetadata,
-        },
-      }),
-    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
+    writeAuditLog(this.prismaService, this.logger, action, userId, metadata);
   }
 
   // ── Sessions ────────────────────────────────────────────────────────────

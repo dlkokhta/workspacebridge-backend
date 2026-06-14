@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { AuditAction, LOGIN_ACTIONS } from '../libs/common/audit/audit-actions';
+import { writeAuditLog } from '../libs/common/audit/audit-log.util';
 
 /**
  * Sends a security alert email when an account is accessed from a device
@@ -12,15 +13,6 @@ import { MailService } from '../mail/mail.service';
 @Injectable()
 export class LoginAlertService {
   private readonly logger = new Logger(LoginAlertService.name);
-
-  // Success actions written by handleSuccessfulLogin — the device history
-  // that notifyIfNewDevice fingerprints against.
-  private static readonly LOGIN_ACTIONS = [
-    'auth.login',
-    'auth.google_login',
-    'auth.2fa_login',
-    'auth.passkey_login',
-  ];
 
   constructor(
     private readonly prismaService: PrismaService,
@@ -34,7 +26,7 @@ export class LoginAlertService {
    * Never throws — an alert/audit failure must not break the login itself.
    */
   async handleSuccessfulLogin(
-    action: string,
+    action: AuditAction,
     params: { userId: string; email: string; ip?: string; userAgent?: string },
   ): Promise<void> {
     await this.notifyIfNewDevice(params);
@@ -56,13 +48,12 @@ export class LoginAlertService {
     try {
       if (!userAgent) return; // can't fingerprint the device
 
-      // ip/userAgent live in the audit metadata JSON until G5 adds
-      // dedicated AuditLog columns.
+      // userAgent is a dedicated, indexed AuditLog column (see G5).
       const knownDevice = await this.prismaService.auditLog.findFirst({
         where: {
           actorId: userId,
-          action: { in: LoginAlertService.LOGIN_ACTIONS },
-          metadata: { path: ['userAgent'], equals: userAgent },
+          action: { in: LOGIN_ACTIONS },
+          userAgent,
         },
       });
       if (knownDevice) return; // we've seen a login from this device before
@@ -70,7 +61,7 @@ export class LoginAlertService {
       const anyPriorLogin = await this.prismaService.auditLog.findFirst({
         where: {
           actorId: userId,
-          action: { in: LoginAlertService.LOGIN_ACTIONS },
+          action: { in: LOGIN_ACTIONS },
         },
       });
       if (!anyPriorLogin) return; // first ever login — expected, no alert
@@ -101,29 +92,13 @@ export class LoginAlertService {
     }
   }
 
-  // Fire-and-forget audit write, same contract as AuthService.auditAuthEvent:
-  // an audit failure is logged server-side and dropped, never thrown.
+  // Fire-and-forget audit write; email/ip/userAgent land in dedicated columns.
   private audit(
-    action: string,
+    action: AuditAction,
     userId: string,
     metadata: Record<string, unknown>,
   ): void {
-    // JSON round-trip strips undefined values, which Prisma's JSON input
-    // rejects (ip/userAgent are optional).
-    const cleanMetadata = JSON.parse(
-      JSON.stringify(metadata),
-    ) as Prisma.InputJsonValue;
-    void Promise.resolve(
-      this.prismaService.auditLog.create({
-        data: {
-          action,
-          targetType: 'user',
-          targetId: userId,
-          actorId: userId,
-          metadata: cleanMetadata,
-        },
-      }),
-    ).catch((err) => this.logger.error('Failed to write auth audit log', err));
+    writeAuditLog(this.prismaService, this.logger, action, userId, metadata);
   }
 
   private describeDevice(ua: string): string {
