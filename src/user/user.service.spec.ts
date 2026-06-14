@@ -6,7 +6,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PasswordBreachService } from '../libs/common/services/password-breach.service';
 import { PasswordHistoryService } from '../libs/common/services/password-history.service';
 import { MailService } from '../mail/mail.service';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  NotFoundException,
+  BadRequestException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import * as argon2 from 'argon2';
 
 jest.mock('argon2');
@@ -32,6 +36,7 @@ const mockPrismaService = {
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
+    delete: jest.fn(),
   },
   session: {
     findMany: jest.fn(),
@@ -43,9 +48,16 @@ const mockPrismaService = {
     findMany: jest.fn(),
     deleteMany: jest.fn(),
   },
+  workspace: {
+    deleteMany: jest.fn(),
+  },
+  token: {
+    deleteMany: jest.fn(),
+  },
   auditLog: {
     create: jest.fn().mockResolvedValue({}),
   },
+  $transaction: jest.fn(),
 };
 
 const mockMailService = {
@@ -347,6 +359,81 @@ describe('UserService', () => {
         where: { id: 'user-123' },
         data: { password: 'new-hashed-pw' },
       });
+    });
+  });
+
+  // ─── deleteOwnAccount ─────────────────────────────────────────────────────────
+
+  describe('deleteOwnAccount', () => {
+    it('throws NotFoundException when the user does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.deleteOwnAccount('user-123', 'pw')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when a credential account omits the password', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+
+      await expect(service.deleteOwnAccount('user-123')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('throws UnauthorizedException when the password is incorrect', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(false);
+
+      await expect(
+        service.deleteOwnAccount('user-123', 'wrong-password'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('hard-deletes the account and owned records on a valid password', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockedVerify.mockResolvedValue(true);
+      mockPrismaService.$transaction.mockResolvedValue([]);
+
+      const result = await service.deleteOwnAccount(
+        'user-123',
+        'correct-password',
+      );
+
+      expect(mockPrismaService.session.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123' },
+      });
+      expect(mockPrismaService.account.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'user-123' },
+      });
+      expect(mockPrismaService.workspace.deleteMany).toHaveBeenCalledWith({
+        where: { ownerId: 'user-123' },
+      });
+      expect(mockPrismaService.token.deleteMany).toHaveBeenCalledWith({
+        where: { email: fakeUser.email },
+      });
+      expect(mockPrismaService.user.delete).toHaveBeenCalledWith({
+        where: { id: 'user-123' },
+      });
+      expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ email: fakeUser.email });
+    });
+
+    it('skips the password check for OAuth accounts (no password)', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        ...fakeUser,
+        password: null,
+        method: 'GOOGLE',
+      });
+      mockPrismaService.$transaction.mockResolvedValue([]);
+
+      await service.deleteOwnAccount('user-123');
+
+      expect(mockedVerify).not.toHaveBeenCalled();
+      expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 

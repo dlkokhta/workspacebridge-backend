@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
+import { DeleteAccountDto } from './dto/delete-account.dto';
 
 @ApiTags('user')
 @ApiBearerAuth('JWT-auth')
@@ -45,6 +46,17 @@ export class UserController {
   @Patch('me/password')
   changePassword(@Req() req: Request, @Body() dto: ChangePasswordDto) {
     return this.userService.changePassword((req.user as any).id, dto);
+  }
+
+  @ApiOperation({ summary: 'Permanently delete the current account' })
+  @ApiResponse({ status: 200, description: 'Account permanently deleted' })
+  @ApiResponse({ status: 400, description: 'Password is required' })
+  @ApiResponse({ status: 401, description: 'Password is incorrect' })
+  @Delete('me')
+  @HttpCode(HttpStatus.OK)
+  async deleteAccount(@Req() req: Request, @Body() dto: DeleteAccountDto) {
+    await this.userService.deleteOwnAccount((req.user as any).id, dto.password);
+    return { message: 'Your account has been permanently deleted.' };
   }
 
   // ── Sign-in methods (linked accounts) ──────────────────────────────────────

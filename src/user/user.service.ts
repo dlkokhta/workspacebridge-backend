@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -117,6 +118,53 @@ export class UserService {
       where: { id },
       data: { password: hashed },
     });
+  }
+
+  /**
+   * Permanently deletes the caller's own account (hard delete). Credential
+   * accounts must re-confirm with their current password; OAuth-only accounts
+   * (no password) skip that check.
+   *
+   * The `sessions`, `accounts` and `workspaces` (owner) foreign keys are
+   * `ON DELETE RESTRICT`, so they must be cleared before the user row goes —
+   * we do it in one transaction. Deleting an owned workspace cascades to all
+   * of its data (messages, files, members, …); a freelancer's hard delete
+   * therefore removes the workspaces they own outright (there is no other
+   * owner to hand them to). Everything else that points at the user
+   * (`backupCodes`, `credentials`, `passwordHistory`, `workspaceMemberships`,
+   * `notifications`, sent messages, …) is `ON DELETE CASCADE` and goes with
+   * the user.delete(). Tokens have no FK, so we clear them by email for hygiene.
+   */
+  public async deleteOwnAccount(userId: string, password?: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (user.password) {
+      if (!password) {
+        throw new BadRequestException(
+          'Password is required to delete your account',
+        );
+      }
+      const isValid = await verify(user.password, password);
+      if (!isValid) {
+        throw new UnauthorizedException('Password is incorrect');
+      }
+    }
+
+    await this.prismaService.$transaction([
+      this.prismaService.session.deleteMany({ where: { userId } }),
+      this.prismaService.account.deleteMany({ where: { userId } }),
+      this.prismaService.workspace.deleteMany({ where: { ownerId: userId } }),
+      this.prismaService.token.deleteMany({ where: { email: user.email } }),
+      this.prismaService.user.delete({ where: { id: userId } }),
+    ]);
+
+    // Logged after the fact; AuditLog has no FK to the (now-deleted) user.
+    this.audit('auth.account_deleted', userId, { email: user.email });
+
+    return { email: user.email };
   }
 
   // ── Sign-in methods (password + linked OAuth providers) ───────────────────
