@@ -37,6 +37,7 @@ model User {
   passwordHistory PasswordHistory[]
   backupCodes     BackupCode[]
   credentials     Credential[]
+  avatar          UserAvatar?
 
   ownedWorkspaces      Workspace[]         @relation("OwnedWorkspaces")
   workspaceMemberships WorkspaceMember[]   @relation("WorkspaceMemberships")
@@ -201,6 +202,23 @@ model Credential {
 
   @@index([userId])
   @@map("credentials")
+}
+
+// A user-uploaded avatar, re-encoded to a square WebP and stored as bytes.
+// Kept in its own table (one row per user) so the heavy blob is never loaded
+// by the frequent User look-ups (auth, profile, etc.). `hash` is the content
+// digest used for the public URL's `?v=` cache-bust.
+model UserAvatar {
+  userId String @id @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  data        Bytes
+  contentType String @default("image/webp") @map("content_type")
+  hash        String
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("user_avatars")
 }
 
 model PasswordHistory {

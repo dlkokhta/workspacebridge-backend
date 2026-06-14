@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { UserService } from './user.service';
 import { UserController } from './user.controller';
+import { AvatarController } from './avatar.controller';
+import { AvatarService } from './avatar.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -21,10 +23,11 @@ import { MailModule } from '../mail/mail.module';
       }),
     }),
   ],
-  controllers: [UserController],
+  controllers: [UserController, AvatarController],
   providers: [
     PrismaService,
     UserService,
+    AvatarService,
     PasswordBreachService,
     PasswordHistoryService,
   ],
