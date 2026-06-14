@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { HealthController } from './health/health.controller';
+import { HealthService } from './health/health.service';
 import { AuthModule } from './auth/auth.module';
 import { IS_DEV_ENV } from './libs/common/utils/is-dev.utils';
 import { UserModule } from './user/user.module';
@@ -71,9 +73,10 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     NotificationModule,
     SearchModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, HealthController],
   providers: [
     AppService,
+    HealthService,
     PrismaService,
     {
       provide: APP_GUARD,
