@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
+import { validateEnv } from './config/env.validation';
 import { AuthModule } from './auth/auth.module';
 import { IS_DEV_ENV } from './libs/common/utils/is-dev.utils';
 import { UserModule } from './user/user.module';
@@ -38,6 +39,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     ConfigModule.forRoot({
       ignoreEnvFile: !IS_DEV_ENV,
       isGlobal: true,
+      validate: validateEnv,
     }),
     ThrottlerModule.forRoot([
       {
