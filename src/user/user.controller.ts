@@ -9,9 +9,10 @@ import {
   Patch,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { UserService } from './user.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -57,6 +58,26 @@ export class UserController {
   async deleteAccount(@Req() req: Request, @Body() dto: DeleteAccountDto) {
     await this.userService.deleteOwnAccount((req.user as any).id, dto.password);
     return { message: 'Your account has been permanently deleted.' };
+  }
+
+  @ApiOperation({ summary: 'Export all personal data (GDPR)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns a downloadable JSON snapshot of the user data',
+  })
+  @Get('me/export')
+  async exportData(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const data = await this.userService.exportOwnData((req.user as any).id);
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="workspacebridge-data-export-${date}.json"`,
+    );
+    return data;
   }
 
   // ── Sign-in methods (linked accounts) ──────────────────────────────────────

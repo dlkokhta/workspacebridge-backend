@@ -49,13 +49,27 @@ const mockPrismaService = {
     deleteMany: jest.fn(),
   },
   workspace: {
+    findMany: jest.fn(),
     deleteMany: jest.fn(),
+  },
+  workspaceMember: {
+    findMany: jest.fn(),
+  },
+  backupCode: {
+    findMany: jest.fn(),
+  },
+  credential: {
+    findMany: jest.fn(),
+  },
+  privateTask: {
+    findMany: jest.fn(),
   },
   token: {
     deleteMany: jest.fn(),
   },
   auditLog: {
     create: jest.fn().mockResolvedValue({}),
+    findMany: jest.fn(),
   },
   $transaction: jest.fn(),
 };
@@ -434,6 +448,87 @@ describe('UserService', () => {
 
       expect(mockedVerify).not.toHaveBeenCalled();
       expect(mockPrismaService.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── exportOwnData ────────────────────────────────────────────────────────────
+
+  describe('exportOwnData', () => {
+    const mockAllExportRelations = () => {
+      mockPrismaService.session.findMany.mockResolvedValue([]);
+      mockPrismaService.account.findMany.mockResolvedValue([]);
+      mockPrismaService.backupCode.findMany.mockResolvedValue([]);
+      mockPrismaService.credential.findMany.mockResolvedValue([]);
+      mockPrismaService.auditLog.findMany.mockResolvedValue([]);
+      mockPrismaService.workspace.findMany.mockResolvedValue([]);
+      mockPrismaService.workspaceMember.findMany.mockResolvedValue([]);
+      mockPrismaService.privateTask.findMany.mockResolvedValue([]);
+    };
+
+    it('throws NotFoundException when the user does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.exportOwnData('user-123')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('aggregates profile, security summary and related data', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockAllExportRelations();
+      mockPrismaService.backupCode.findMany.mockResolvedValue([
+        { usedAt: new Date() },
+        { usedAt: null },
+      ]);
+      mockPrismaService.workspaceMember.findMany.mockResolvedValue([
+        {
+          role: 'CLIENT',
+          createdAt: new Date(),
+          workspace: { id: 'ws-1', name: 'Acme' },
+        },
+      ]);
+
+      const result = await service.exportOwnData('user-123');
+
+      expect(result.format).toBe('workspacebridge-account-export');
+      expect(result.profile.email).toBe(fakeUser.email);
+      expect(result.security.hasPassword).toBe(true);
+      expect(result.security.backupCodes).toEqual({ total: 2, used: 1 });
+      expect(result.workspaces.memberOf).toEqual([
+        {
+          workspaceId: 'ws-1',
+          workspaceName: 'Acme',
+          role: 'CLIENT',
+          joinedAt: expect.any(Date),
+        },
+      ]);
+    });
+
+    it('never serialises the password hash and records an audit event', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(fakeUser);
+      mockAllExportRelations();
+
+      const result = await service.exportOwnData('user-123');
+
+      expect(JSON.stringify(result)).not.toContain(fakeUser.password);
+      expect(mockPrismaService.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ action: 'auth.data_exported' }),
+        }),
+      );
+    });
+
+    it('reports hasPassword false for OAuth-only accounts', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        ...fakeUser,
+        password: null,
+        method: 'GOOGLE',
+      });
+      mockAllExportRelations();
+
+      const result = await service.exportOwnData('user-123');
+
+      expect(result.security.hasPassword).toBe(false);
     });
   });
 

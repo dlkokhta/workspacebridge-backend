@@ -167,6 +167,167 @@ export class UserService {
     return { email: user.email };
   }
 
+  /**
+   * Builds a portable JSON snapshot of everything the platform holds about the
+   * caller, for GDPR "right to access / data portability". Every field is
+   * pulled through an explicit `select` so secrets (password hash, 2FA secret,
+   * refresh-token hashes, OAuth access/refresh tokens, backup-code & passkey
+   * key material) are never serialised — only non-sensitive summaries of them.
+   * The password column is read solely to derive `hasPassword` and is dropped
+   * before the document is assembled.
+   */
+  public async exportOwnData(userId: string) {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        firstname: true,
+        lastname: true,
+        email: true,
+        role: true,
+        plan: true,
+        status: true,
+        picture: true,
+        method: true,
+        isVerified: true,
+        isTwoFactorEnabled: true,
+        createdAt: true,
+        updatedAt: true,
+        password: true, // only to derive hasPassword — never serialised
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const [
+      sessions,
+      linkedAccounts,
+      backupCodes,
+      passkeys,
+      activity,
+      ownedWorkspaces,
+      memberships,
+      privateTasks,
+    ] = await Promise.all([
+      this.prismaService.session.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          ip: true,
+          userAgent: true,
+          createdAt: true,
+          updatedAt: true,
+          expiresAt: true,
+        },
+      }),
+      this.prismaService.account.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: { provider: true, providerAccountId: true, createdAt: true },
+      }),
+      this.prismaService.backupCode.findMany({
+        where: { userId },
+        select: { usedAt: true },
+      }),
+      this.prismaService.credential.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          name: true,
+          deviceType: true,
+          backedUp: true,
+          transports: true,
+          createdAt: true,
+          lastUsedAt: true,
+        },
+      }),
+      this.prismaService.auditLog.findMany({
+        where: { actorId: userId },
+        orderBy: { createdAt: 'desc' },
+        take: 1000,
+        select: { action: true, metadata: true, createdAt: true },
+      }),
+      this.prismaService.workspace.findMany({
+        where: { ownerId: userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          color: true,
+          status: true,
+          createdAt: true,
+        },
+      }),
+      this.prismaService.workspaceMember.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          role: true,
+          createdAt: true,
+          workspace: { select: { id: true, name: true } },
+        },
+      }),
+      this.prismaService.privateTask.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          title: true,
+          status: true,
+          workspaceId: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+    ]);
+
+    const { password, ...profile } = user;
+
+    this.audit('auth.data_exported', userId, { email: profile.email });
+
+    return {
+      format: 'workspacebridge-account-export',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      profile: {
+        id: profile.id,
+        firstName: profile.firstname,
+        lastName: profile.lastname,
+        email: profile.email,
+        role: profile.role,
+        plan: profile.plan,
+        status: profile.status,
+        picture: profile.picture,
+        signInMethod: profile.method,
+        isVerified: profile.isVerified,
+        isTwoFactorEnabled: profile.isTwoFactorEnabled,
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+      },
+      security: {
+        hasPassword: !!password,
+        twoFactorEnabled: profile.isTwoFactorEnabled,
+        backupCodes: {
+          total: backupCodes.length,
+          used: backupCodes.filter((c) => c.usedAt !== null).length,
+        },
+        passkeys,
+      },
+      linkedAccounts,
+      sessions,
+      activity,
+      workspaces: {
+        owned: ownedWorkspaces,
+        memberOf: memberships.map((m) => ({
+          workspaceId: m.workspace.id,
+          workspaceName: m.workspace.name,
+          role: m.role,
+          joinedAt: m.createdAt,
+        })),
+      },
+      privateTasks,
+    };
+  }
+
   // ── Sign-in methods (password + linked OAuth providers) ───────────────────
 
   // What the profile UI needs to render the "sign-in methods" card.
