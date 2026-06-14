@@ -70,6 +70,7 @@ const mockPrismaService = {
   auditLog: {
     create: jest.fn().mockResolvedValue({}),
     findMany: jest.fn(),
+    count: jest.fn(),
   },
   $transaction: jest.fn(),
 };
@@ -529,6 +530,62 @@ describe('UserService', () => {
       const result = await service.exportOwnData('user-123');
 
       expect(result.security.hasPassword).toBe(false);
+    });
+  });
+
+  // ─── getActivity ────────────────────────────────────────────────────────────
+
+  describe('getActivity', () => {
+    it('maps rows, lifts context from metadata and computes pagination', async () => {
+      const rows = [
+        {
+          id: 'a1',
+          action: 'auth.login',
+          createdAt: new Date(),
+          metadata: { ip: '1.2.3.4', userAgent: 'UA', device: 'Mac', extra: 1 },
+        },
+        {
+          id: 'a2',
+          action: 'auth.login_failed',
+          createdAt: new Date(),
+          metadata: null,
+        },
+      ];
+      mockPrismaService.$transaction.mockResolvedValue([rows, 5]);
+
+      const result = await service.getActivity('user-123', 1, 2);
+
+      expect(mockPrismaService.auditLog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { actorId: 'user-123', action: { startsWith: 'auth.' } },
+          skip: 0,
+          take: 2,
+        }),
+      );
+      expect(result.total).toBe(5);
+      expect(result.hasMore).toBe(true);
+      expect(result.items[0].context).toEqual({
+        ip: '1.2.3.4',
+        userAgent: 'UA',
+        device: 'Mac',
+        provider: undefined,
+      });
+      // Non-string / unknown metadata keys are not leaked through.
+      expect(result.items[0].context).not.toHaveProperty('extra');
+      expect(result.items[1].context.ip).toBeUndefined();
+    });
+
+    it('clamps limit to 100 and defaults page to 1', async () => {
+      mockPrismaService.$transaction.mockResolvedValue([[], 0]);
+
+      const result = await service.getActivity('user-123', 0, 500);
+
+      expect(mockPrismaService.auditLog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 100 }),
+      );
+      expect(result.page).toBe(1);
+      expect(result.limit).toBe(100);
+      expect(result.hasMore).toBe(false);
     });
   });
 

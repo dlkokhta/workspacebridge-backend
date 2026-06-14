@@ -328,6 +328,61 @@ export class UserService {
     };
   }
 
+  /**
+   * Paginated security activity timeline for the caller — their own `auth.*`
+   * audit rows (sign-ins, failed attempts, new-device logins, 2FA / passkey /
+   * email / password changes, etc.), newest first. Only non-sensitive context
+   * (ip / userAgent / device / provider) is lifted out of the metadata JSON;
+   * the raw blob is never returned wholesale.
+   */
+  public async getActivity(userId: string, page = 1, limit = 20) {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const safePage = Math.max(page, 1);
+    const skip = (safePage - 1) * take;
+
+    const where: Prisma.AuditLogWhereInput = {
+      actorId: userId,
+      action: { startsWith: 'auth.' },
+    };
+
+    const [rows, total] = await this.prismaService.$transaction([
+      this.prismaService.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        select: { id: true, action: true, metadata: true, createdAt: true },
+      }),
+      this.prismaService.auditLog.count({ where }),
+    ]);
+
+    const asString = (value: unknown) =>
+      typeof value === 'string' ? value : undefined;
+
+    const items = rows.map((row) => {
+      const meta = (row.metadata ?? {}) as Record<string, unknown>;
+      return {
+        id: row.id,
+        action: row.action,
+        createdAt: row.createdAt,
+        context: {
+          ip: asString(meta.ip),
+          userAgent: asString(meta.userAgent),
+          device: asString(meta.device),
+          provider: asString(meta.provider),
+        },
+      };
+    });
+
+    return {
+      items,
+      total,
+      page: safePage,
+      limit: take,
+      hasMore: skip + rows.length < total,
+    };
+  }
+
   // ── Sign-in methods (password + linked OAuth providers) ───────────────────
 
   // What the profile UI needs to render the "sign-in methods" card.

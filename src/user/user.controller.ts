@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -20,6 +21,7 @@ import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { DeleteAccountDto } from './dto/delete-account.dto';
+import { ActivityQueryDto } from './dto/activity-query.dto';
 
 @ApiTags('user')
 @ApiBearerAuth('JWT-auth')
@@ -78,6 +80,20 @@ export class UserController {
       `attachment; filename="workspacebridge-data-export-${date}.json"`,
     );
     return data;
+  }
+
+  @ApiOperation({ summary: 'Account activity timeline (auth events)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns the paginated auth activity for the current user',
+  })
+  @Get('me/activity')
+  getActivity(@Req() req: Request, @Query() query: ActivityQueryDto) {
+    return this.userService.getActivity(
+      (req.user as any).id,
+      query.page,
+      query.limit,
+    );
   }
 
   // ── Sign-in methods (linked accounts) ──────────────────────────────────────
