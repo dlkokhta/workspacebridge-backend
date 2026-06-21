@@ -58,6 +58,18 @@ export class SharedTaskGateway
         return;
       }
 
+      // Stamp auth state synchronously, before the async status lookup.
+      // handleConnection is async and socket.io does not buffer inbound
+      // events until it resolves, so a client that emits on connect can be
+      // handled before these are set. Without them rejectExpiredSocket
+      // would see no tokenExpiresAt and drop the socket as "expired".
+      client.userId = payload.userId;
+      client.userEmail = payload.email;
+      // Recorded so handlers can drop the socket once the access token
+      // expires — verifying the JWT only at connect time isn't enough
+      // when the socket lives for hours.
+      client.tokenExpiresAt = payload.exp;
+
       const user = await this.prisma.user.findUnique({
         where: { id: payload.userId },
         select: { status: true },
@@ -66,13 +78,6 @@ export class SharedTaskGateway
         client.disconnect();
         return;
       }
-
-      client.userId = payload.userId;
-      client.userEmail = payload.email;
-      // Recorded so handlers can drop the socket once the access token
-      // expires — verifying the JWT only at connect time isn't enough
-      // when the socket lives for hours.
-      client.tokenExpiresAt = payload.exp;
     } catch {
       client.disconnect();
     }

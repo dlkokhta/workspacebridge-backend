@@ -75,15 +75,12 @@ export class WhiteboardGateway
         return;
       }
 
-      const user = await this.prismaService.user.findUnique({
-        where: { id: payload.userId },
-        select: { status: true },
-      });
-      if (!user || user.status !== UserStatus.ACTIVE) {
-        client.disconnect();
-        return;
-      }
-
+      // Stamp auth state synchronously, before the async status lookup.
+      // handleConnection is async and socket.io does not buffer inbound
+      // events until it resolves, so a client that emits on connect (e.g.
+      // joinBoard) can be handled before these are set. Without them
+      // rejectExpiredSocket would see no tokenExpiresAt and drop the socket
+      // as "expired", leaving the board stuck on "Loading whiteboard…".
       client.userId = payload.userId;
       client.userEmail = payload.email;
       client.firstname = null;
@@ -92,6 +89,15 @@ export class WhiteboardGateway
       // expires — verifying the JWT only at connect time isn't enough
       // when boards stay open for hours.
       client.tokenExpiresAt = payload.exp;
+
+      const user = await this.prismaService.user.findUnique({
+        where: { id: payload.userId },
+        select: { status: true },
+      });
+      if (!user || user.status !== UserStatus.ACTIVE) {
+        client.disconnect();
+        return;
+      }
     } catch {
       client.disconnect();
     }

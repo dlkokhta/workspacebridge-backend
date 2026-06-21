@@ -73,6 +73,18 @@ export class MessageGateway
         return;
       }
 
+      // Stamp auth state synchronously, before the async status lookup.
+      // handleConnection is async and socket.io does not buffer inbound
+      // events until it resolves, so a client that emits on connect can be
+      // handled before these are set. Without them rejectExpiredSocket
+      // would see no tokenExpiresAt and drop the socket as "expired".
+      client.userId = payload.userId;
+      client.userEmail = payload.email;
+      // Record exp so handlers can drop the socket once the access token
+      // expires — verifying the JWT only at connect time isn't enough
+      // when the socket lives for hours.
+      client.tokenExpiresAt = payload.exp;
+
       const user = await this.prismaService.user.findUnique({
         where: { id: payload.userId },
         select: { status: true, firstname: true, lastname: true },
@@ -82,15 +94,9 @@ export class MessageGateway
         return;
       }
 
-      client.userId = payload.userId;
-      client.userEmail = payload.email;
       client.userName =
         [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
         payload.email;
-      // Record exp so handlers can drop the socket once the access token
-      // expires — verifying the JWT only at connect time isn't enough
-      // when the socket lives for hours.
-      client.tokenExpiresAt = payload.exp;
       // The frontend keeps a /chat socket open whenever the user is logged in,
       // so this doubles as app-wide presence used by notifications.
       this.presenceService.add(client.userId, client.id);
