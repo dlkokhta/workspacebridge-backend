@@ -4,8 +4,23 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'crypto';
-import sharp from 'sharp';
+import * as sharpNs from 'sharp';
 import { PrismaService } from '../prisma/prisma.service';
+
+// sharp is CommonJS (`module.exports = fn`) but its types declare `export
+// default`. This project's tsconfig has esModuleInterop off, so a plain
+// `import sharp from 'sharp'` compiles to `sharp_1.default`, which is
+// `undefined` at runtime ("sharp_1.default is not a function") — every avatar
+// upload failed. Binding the namespace (the function at runtime) and re-typing
+// it to the chain we use keeps the call type-safe while emitting a direct
+// `require('sharp')` call, independent of how sharp's dual ESM/CJS types resolve.
+interface SharpChain {
+  rotate(): SharpChain;
+  resize(width: number, height: number, options: { fit: 'cover' }): SharpChain;
+  webp(options: { quality: number }): SharpChain;
+  toBuffer(): Promise<Buffer>;
+}
+const sharp = sharpNs as unknown as (input: Buffer) => SharpChain;
 
 const AVATAR_SIZE = 512;
 

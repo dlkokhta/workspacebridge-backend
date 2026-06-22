@@ -44,6 +44,12 @@ export class AvatarController {
     res.setHeader('Content-Type', avatar.contentType);
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     res.setHeader('ETag', `"${avatar.hash}"`);
+    // Helmet sets Cross-Origin-Resource-Policy: same-origin globally, which makes
+    // the browser fetch this image but refuse to render it when embedded from the
+    // frontend origin (different port = cross-origin), showing a broken image.
+    // This endpoint is intentionally public and meant to be embedded cross-origin,
+    // so opt it out of CORP. Override must come after helmet's middleware (it does).
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.send(avatar.data);
   }
 
@@ -63,7 +69,15 @@ export class AvatarController {
       new ParseFilePipe({
         validators: [
           new MaxFileSizeValidator({ maxSize: MAX_AVATAR_BYTES }),
-          new FileTypeValidator({ fileType: /^image\/(png|jpe?g|webp|gif|avif)$/ }),
+          // Match the declared mimetype rather than sniffing magic numbers:
+          // Nest 11's magic-number path needs file-type v17+ (`fileTypeFromBuffer`),
+          // but this project is on file-type v16 (`fromBuffer`), so that path throws
+          // and rejects every upload. The content is still validated downstream —
+          // sharp re-encodes and throws BadRequest on anything that isn't a real image.
+          new FileTypeValidator({
+            fileType: /^image\/(png|jpe?g|webp|gif|avif)$/,
+            skipMagicNumbersValidation: true,
+          }),
         ],
       }),
     )
