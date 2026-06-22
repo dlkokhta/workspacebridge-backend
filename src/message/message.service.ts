@@ -74,4 +74,23 @@ export class MessageService {
       select: { userId: true, lastReadAt: true },
     });
   }
+
+  /**
+   * How many messages from other people the user hasn't seen yet — those
+   * created after their last read position. Own messages never count, and with
+   * no read record every message from others is unread.
+   */
+  async unreadCount(workspaceId: string, userId: string): Promise<number> {
+    const read = await this.prisma.chatRead.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      select: { lastReadAt: true },
+    });
+    return this.prisma.message.count({
+      where: {
+        workspaceId,
+        senderId: { not: userId },
+        ...(read && { createdAt: { gt: read.lastReadAt } }),
+      },
+    });
+  }
 }

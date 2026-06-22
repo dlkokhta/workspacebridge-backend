@@ -200,6 +200,35 @@ export class MessageGateway
     });
   }
 
+  @SubscribeMessage('getUnreadCount')
+  async handleGetUnreadCount(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: JoinRoomDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    const { workspaceId } = body;
+    const isMember = await this.messageService.isWorkspaceMember(
+      workspaceId,
+      client.userId,
+    );
+
+    if (!isMember) {
+      client.emit('error', { message: 'Access denied' });
+      return;
+    }
+
+    // Join the room so this socket keeps receiving `newMessage` even while the
+    // user sits on another tab — that's what lets the unread badge tick up live
+    // without opening Messages. Unlike `joinRoom`, no history is sent.
+    await client.join(workspaceId);
+
+    const count = await this.messageService.unreadCount(
+      workspaceId,
+      client.userId,
+    );
+    client.emit('unreadCount', { workspaceId, count });
+  }
+
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
