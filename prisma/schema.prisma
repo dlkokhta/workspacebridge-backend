@@ -51,6 +51,7 @@ model User {
   notifications        Notification[]      @relation("UserNotifications")
   fileComments         FileComment[]       @relation("FileComments")
   chatReads            ChatRead[]          @relation("UserChatReads")
+  fileViews            FileView[]          @relation("UserFileViews")
 
   @@map("users")
 }
@@ -255,6 +256,7 @@ model Workspace {
   privateTasks  PrivateTask[]
   notifications Notification[]
   chatReads     ChatRead[]
+  fileViews     FileView[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -280,6 +282,24 @@ model ChatRead {
   @@unique([workspaceId, userId])
   @@index([workspaceId])
   @@map("chat_reads")
+}
+
+// Tracks how recently a user opened a workspace's Files tab, so the tab can
+// show a "new files" dot when files from others have been added since.
+model FileView {
+  id String @id @default(uuid())
+
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id")
+  user   User   @relation("UserFileViews", fields: [userId], references: [id], onDelete: Cascade)
+
+  lastSeenAt DateTime @map("last_seen_at")
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@map("file_views")
 }
 
 model Message {

@@ -64,6 +64,50 @@ export class FileService {
     }));
   }
 
+  /**
+   * Whether files from other people have been added since the user last opened
+   * this workspace's Files tab — drives the "new files" dot. The user's own
+   * uploads never count; with no view record, any file from others counts.
+   */
+  async hasNewFiles(
+    workspaceId: string,
+    userId: string,
+  ): Promise<{ hasNew: boolean }> {
+    await this.ensureWorkspaceAccess(workspaceId, userId);
+
+    const view = await this.prisma.fileView.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      select: { lastSeenAt: true },
+    });
+
+    const count = await this.prisma.file.count({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        uploadedById: { not: userId },
+        ...(view && { createdAt: { gt: view.lastSeenAt } }),
+      },
+    });
+
+    return { hasNew: count > 0 };
+  }
+
+  /** Records that the user just viewed the Files tab, clearing the dot. */
+  async markFilesSeen(
+    workspaceId: string,
+    userId: string,
+  ): Promise<{ lastSeenAt: Date }> {
+    await this.ensureWorkspaceAccess(workspaceId, userId);
+
+    const lastSeenAt = new Date();
+    await this.prisma.fileView.upsert({
+      where: { workspaceId_userId: { workspaceId, userId } },
+      create: { workspaceId, userId, lastSeenAt },
+      update: { lastSeenAt },
+    });
+    return { lastSeenAt };
+  }
+
   async upload({ workspaceId, userId, file }: UploadParams) {
     if (!file) {
       throw new BadRequestException('File is required');

@@ -39,6 +39,24 @@ export class FileController {
     return this.fileService.list(workspaceId, user.id, user.role);
   }
 
+  @Get('workspace/:workspaceId/files/new')
+  @ApiOperation({
+    summary: 'Whether files from others were added since the user last looked',
+  })
+  @ApiResponse({ status: 200, description: 'Returns { hasNew }' })
+  hasNew(@Req() req: Request, @Param('workspaceId') workspaceId: string) {
+    const user = req.user as RequestUser;
+    return this.fileService.hasNewFiles(workspaceId, user.id);
+  }
+
+  @Post('workspace/:workspaceId/files/seen')
+  @ApiOperation({ summary: 'Mark the Files tab viewed (clears the new dot)' })
+  @ApiResponse({ status: 201, description: 'Returns { lastSeenAt }' })
+  markSeen(@Req() req: Request, @Param('workspaceId') workspaceId: string) {
+    const user = req.user as RequestUser;
+    return this.fileService.markFilesSeen(workspaceId, user.id);
+  }
+
   @Get('workspace/:workspaceId/files/trash')
   @ApiOperation({ summary: 'List soft-deleted files within the 30-day window' })
   @ApiResponse({ status: 200, description: 'Returns trashed files with deletedAt' })
