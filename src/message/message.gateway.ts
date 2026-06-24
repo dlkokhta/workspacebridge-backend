@@ -31,6 +31,9 @@ interface AuthenticatedSocket extends Socket {
   // hit the database to resolve a display name.
   userName: string;
   tokenExpiresAt?: number;
+  // The workspace whose Messages tab this socket currently has open, if any.
+  // Tracked so disconnects can clear the active-viewer registry below.
+  viewingWorkspaceId?: string;
 }
 
 @WebSocketGateway({
@@ -45,6 +48,12 @@ export class MessageGateway
   server: Server;
 
   private readonly logger = new Logger(MessageGateway.name);
+
+  // workspaceId -> userId -> socket ids that currently have that workspace's
+  // Messages tab open. A user viewing the thread on any socket is an "active
+  // viewer" and is skipped when dispatching new-message notifications: they
+  // are already watching the conversation, so a bell badge would be noise.
+  private readonly messageViewers = new Map<string, Map<string, Set<string>>>();
 
   constructor(
     private readonly messageService: MessageService,
@@ -108,6 +117,9 @@ export class MessageGateway
   handleDisconnect(client: AuthenticatedSocket) {
     if (client.userId) {
       this.presenceService.remove(client.userId, client.id);
+      if (client.viewingWorkspaceId) {
+        this.removeViewer(client.viewingWorkspaceId, client);
+      }
     }
     client.rooms.forEach((room) => client.leave(room));
   }
@@ -130,6 +142,9 @@ export class MessageGateway
     }
 
     await client.join(workspaceId);
+    // The Messages tab is now open for this socket, so suppress new-message
+    // notifications to this user for this workspace while it stays open.
+    this.addViewer(workspaceId, client);
 
     const history = await this.messageService.getMessages(workspaceId);
     client.emit('messageHistory', history);
@@ -141,6 +156,18 @@ export class MessageGateway
       client.userId,
     );
     client.emit('readState', readState);
+  }
+
+  @SubscribeMessage('leaveRoom')
+  handleLeaveRoom(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: JoinRoomDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    // The Messages tab closed (tab switch / navigation). Clear the active-viewer
+    // flag so new-message notifications to this user resume. The socket keeps
+    // its room membership so the unread badge still updates from other tabs.
+    this.removeViewer(body.workspaceId, client);
   }
 
   @SubscribeMessage('loadMoreMessages')
@@ -264,6 +291,10 @@ export class MessageGateway
         .join(' ')
         .trim() || message.sender.email;
 
+    // Anyone with this workspace's Messages tab open is reading live; skip
+    // their bell notification (the sender is already excluded downstream).
+    const activeViewerIds = this.getViewerIds(workspaceId);
+
     // Fire-and-forget: notification delivery must never block or fail chat.
     void this.notificationService
       .notifyNewMessage({
@@ -271,6 +302,7 @@ export class MessageGateway
         senderId: client.userId,
         senderName,
         content: trimmed,
+        activeViewerIds,
       })
       .catch((error: unknown) => {
         this.logger.error(
@@ -278,5 +310,53 @@ export class MessageGateway
           error instanceof Error ? error.stack : undefined,
         );
       });
+  }
+
+  // Records that a socket has this workspace's Messages tab open. Replaces any
+  // previously viewed workspace for the same socket (e.g. switching workspaces
+  // without a clean unmount) so a socket only ever counts once.
+  private addViewer(workspaceId: string, client: AuthenticatedSocket): void {
+    if (
+      client.viewingWorkspaceId &&
+      client.viewingWorkspaceId !== workspaceId
+    ) {
+      this.removeViewer(client.viewingWorkspaceId, client);
+    }
+
+    let byUser = this.messageViewers.get(workspaceId);
+    if (!byUser) {
+      byUser = new Map<string, Set<string>>();
+      this.messageViewers.set(workspaceId, byUser);
+    }
+    const sockets = byUser.get(client.userId);
+    if (sockets) {
+      sockets.add(client.id);
+    } else {
+      byUser.set(client.userId, new Set([client.id]));
+    }
+    client.viewingWorkspaceId = workspaceId;
+  }
+
+  // Clears a socket's active-viewer entry, pruning now-empty inner maps. Leaves
+  // the socket.io room membership untouched: the socket stays subscribed to
+  // `newMessage` so the unread badge keeps ticking from other tabs.
+  private removeViewer(workspaceId: string, client: AuthenticatedSocket): void {
+    const byUser = this.messageViewers.get(workspaceId);
+    if (byUser) {
+      const sockets = byUser.get(client.userId);
+      if (sockets) {
+        sockets.delete(client.id);
+        if (sockets.size === 0) byUser.delete(client.userId);
+      }
+      if (byUser.size === 0) this.messageViewers.delete(workspaceId);
+    }
+    if (client.viewingWorkspaceId === workspaceId) {
+      client.viewingWorkspaceId = undefined;
+    }
+  }
+
+  // Ids of users currently viewing this workspace's Messages tab.
+  private getViewerIds(workspaceId: string): string[] {
+    return [...(this.messageViewers.get(workspaceId)?.keys() ?? [])];
   }
 }

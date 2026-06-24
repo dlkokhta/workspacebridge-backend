@@ -76,10 +76,20 @@ export class NotificationService {
     senderId: string;
     senderName: string;
     content: string;
+    // Members who currently have this workspace's Messages tab open. They are
+    // watching the thread live, so a notification would only be bell-badge
+    // noise — skip them entirely (no row, no live push, no email).
+    activeViewerIds?: string[];
   }): Promise<void> {
-    const { workspaceId, senderId, senderName, content } = params;
+    const { workspaceId, senderId, senderName, content, activeViewerIds } =
+      params;
     const resolved = await this.resolveRecipients(workspaceId, senderId);
-    if (!resolved || resolved.recipients.size === 0) return;
+    if (!resolved) return;
+
+    for (const viewerId of activeViewerIds ?? []) {
+      resolved.recipients.delete(viewerId);
+    }
+    if (resolved.recipients.size === 0) return;
 
     const preview = this.truncate(content, PREVIEW_MAX_LENGTH);
     await this.dispatch({
