@@ -1,4 +1,10 @@
-import { OnModuleDestroy, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  OnModuleDestroy,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -19,6 +25,11 @@ import { rejectExpiredSocket } from '../libs/common/utils/socket-auth';
 import { JoinBoardDto } from './dto/join-board.dto';
 import { SceneUpdateDto } from './dto/scene-update.dto';
 import { PointerUpdateDto } from './dto/pointer-update.dto';
+import { JoinWorkspaceBoardsDto } from './dto/join-workspace-boards.dto';
+
+// Workspace-scoped room for board-list lifecycle (created / deleted / renamed)
+// and presenter follow events — kept distinct from per-board rooms (raw ids).
+const workspaceBoardsRoom = (workspaceId: string) => `ws-boards:${workspaceId}`;
 
 interface AuthenticatedSocket extends Socket {
   userId: string;
@@ -49,8 +60,13 @@ export class WhiteboardGateway
 
   private pendingTimers = new Map<string, NodeJS.Timeout>();
   private pendingPayloads = new Map<string, PendingPayload>();
+  // workspaceId -> the board the presenter (owner) is currently on, so a client
+  // that opens the tab after the owner immediately follows to the right board.
+  private readonly presentedBoards = new Map<string, string>();
 
   constructor(
+    // forwardRef: the service also broadcasts through this gateway (direct cycle).
+    @Inject(forwardRef(() => WhiteboardService))
     private readonly whiteboardService: WhiteboardService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -158,6 +174,61 @@ export class WhiteboardGateway
     });
   }
 
+  // Subscribes a socket to its workspace's board-list lifecycle + presenter
+  // events. Kept separate from joinBoard so the tab bar stays in sync even
+  // before (or without) any specific board being open.
+  @SubscribeMessage('joinWorkspaceBoards')
+  async handleJoinWorkspaceBoards(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: JoinWorkspaceBoardsDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    const allowed = await this.whiteboardService.canAccessWorkspace(
+      body.workspaceId,
+      client.userId,
+    );
+    if (!allowed) {
+      client.emit('error', { message: 'Access denied' });
+      return;
+    }
+    await client.join(workspaceBoardsRoom(body.workspaceId));
+
+    // Catch a late joiner up to the presenter's current board (the frontend
+    // ignores this for the owner, who is the one driving).
+    const presented = this.presentedBoards.get(body.workspaceId);
+    if (presented) client.emit('boardPresented', { boardId: presented });
+  }
+
+  @SubscribeMessage('leaveWorkspaceBoards')
+  handleLeaveWorkspaceBoards(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: JoinWorkspaceBoardsDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    void client.leave(workspaceBoardsRoom(body.workspaceId));
+  }
+
+  // The presenter (workspace owner) switched their active board; tell the
+  // clients in the workspace room to follow. Only the owner may present, and
+  // the broadcast room is derived server-side from the board, never trusted
+  // from the payload.
+  @SubscribeMessage('presentBoard')
+  async handlePresentBoard(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() body: JoinBoardDto,
+  ) {
+    if (rejectExpiredSocket(client)) return;
+    const workspaceId = await this.whiteboardService.ownedBoardWorkspaceId(
+      body.boardId,
+      client.userId,
+    );
+    if (!workspaceId) return;
+    this.presentedBoards.set(workspaceId, body.boardId);
+    client
+      .to(workspaceBoardsRoom(workspaceId))
+      .emit('boardPresented', { boardId: body.boardId });
+  }
+
   @SubscribeMessage('sceneUpdate')
   async handleSceneUpdate(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -223,6 +294,34 @@ export class WhiteboardGateway
     },
   ) {
     this.server.to(boardId).emit('boardRestored', { boardId, ...payload });
+  }
+
+  broadcastBoardCreated(
+    workspaceId: string,
+    board: { id: string; name: string; updatedAt: Date },
+  ) {
+    this.server
+      .to(workspaceBoardsRoom(workspaceId))
+      .emit('boardCreated', board);
+  }
+
+  broadcastBoardRenamed(
+    workspaceId: string,
+    board: { id: string; name: string; updatedAt: Date },
+  ) {
+    this.server
+      .to(workspaceBoardsRoom(workspaceId))
+      .emit('boardRenamed', board);
+  }
+
+  broadcastBoardDeleted(workspaceId: string, boardId: string) {
+    // Drop a stale presenter pointer so late joiners aren't sent to a dead board.
+    if (this.presentedBoards.get(workspaceId) === boardId) {
+      this.presentedBoards.delete(workspaceId);
+    }
+    this.server
+      .to(workspaceBoardsRoom(workspaceId))
+      .emit('boardDeleted', { id: boardId });
   }
 
   private schedulePersist(boardId: string, payload: PendingPayload) {

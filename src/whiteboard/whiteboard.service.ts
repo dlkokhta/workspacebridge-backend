@@ -1,18 +1,26 @@
 import {
   BadRequestException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhiteboardGateway } from './whiteboard.gateway';
 import { SaveWhiteboardDto } from './dto/save-whiteboard.dto';
 import { CreateWhiteboardDto } from './dto/create-whiteboard.dto';
 import { RenameWhiteboardDto } from './dto/rename-whiteboard.dto';
 
 @Injectable()
 export class WhiteboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // forwardRef: the gateway also depends on this service (direct cycle).
+    @Inject(forwardRef(() => WhiteboardGateway))
+    private readonly gateway: WhiteboardGateway,
+  ) {}
 
   async getUserName(userId: string) {
     return this.prisma.user.findUnique({
@@ -63,6 +71,41 @@ export class WhiteboardService {
     return !!member;
   }
 
+  // Owner or member — used by the gateway to gate the workspace board-sync
+  // room without needing the caller's role (which sockets don't carry).
+  async canAccessWorkspace(
+    workspaceId: string,
+    userId: string,
+  ): Promise<boolean> {
+    const workspace = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ownerId: true },
+    });
+    if (!workspace) return false;
+    if (workspace.ownerId === userId) return true;
+
+    const member = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+    });
+    return !!member;
+  }
+
+  // Returns the board's workspace id only when the user owns that workspace —
+  // i.e. is the "presenter" whose board switches clients follow. Null otherwise,
+  // so the gateway can derive the broadcast room server-side instead of
+  // trusting a client-supplied workspace id.
+  async ownedBoardWorkspaceId(
+    boardId: string,
+    userId: string,
+  ): Promise<string | null> {
+    const board = await this.prisma.whiteboard.findUnique({
+      where: { id: boardId },
+      select: { workspaceId: true, workspace: { select: { ownerId: true } } },
+    });
+    if (!board || board.workspace.ownerId !== userId) return null;
+    return board.workspaceId;
+  }
+
   async list(workspaceId: string, userId: string, role: UserRole) {
     await this.assertWorkspaceAccess(workspaceId, userId, role);
     return this.prisma.whiteboard.findMany({
@@ -84,7 +127,7 @@ export class WhiteboardService {
       dto.appState === undefined
         ? Prisma.JsonNull
         : (dto.appState as Prisma.InputJsonValue);
-    return this.prisma.whiteboard.create({
+    const board = await this.prisma.whiteboard.create({
       data: {
         workspaceId,
         name: dto.name?.trim() || 'Untitled board',
@@ -92,6 +135,13 @@ export class WhiteboardService {
         appState,
       },
     });
+    // Let other participants' tab bars pick up the new board live.
+    this.gateway.broadcastBoardCreated(workspaceId, {
+      id: board.id,
+      name: board.name,
+      updatedAt: board.updatedAt,
+    });
+    return board;
   }
 
   async getByIdForSocket(boardId: string) {
@@ -146,11 +196,17 @@ export class WhiteboardService {
     if (!allowed) throw new ForbiddenException('Access denied');
     const name = dto.name.trim();
     if (!name) throw new BadRequestException('Name cannot be empty');
-    return this.prisma.whiteboard.update({
+    const board = await this.prisma.whiteboard.update({
       where: { id: boardId },
       data: { name },
-      select: { id: true, name: true, updatedAt: true },
+      select: { id: true, name: true, updatedAt: true, workspaceId: true },
     });
+    this.gateway.broadcastBoardRenamed(board.workspaceId, {
+      id: board.id,
+      name: board.name,
+      updatedAt: board.updatedAt,
+    });
+    return board;
   }
 
   async duplicate(boardId: string, userId: string) {
@@ -160,7 +216,7 @@ export class WhiteboardService {
       where: { id: boardId },
     });
     if (!source) throw new NotFoundException('Whiteboard not found');
-    return this.prisma.whiteboard.create({
+    const board = await this.prisma.whiteboard.create({
       data: {
         workspaceId: source.workspaceId,
         name: `${source.name} (copy)`.slice(0, 100),
@@ -176,6 +232,12 @@ export class WhiteboardService {
       },
       select: { id: true, name: true, updatedAt: true, createdAt: true },
     });
+    this.gateway.broadcastBoardCreated(source.workspaceId, {
+      id: board.id,
+      name: board.name,
+      updatedAt: board.updatedAt,
+    });
+    return board;
   }
 
   async delete(boardId: string, userId: string) {
@@ -187,6 +249,7 @@ export class WhiteboardService {
     if (board.workspace.ownerId !== userId)
       throw new ForbiddenException('Only the workspace owner can delete');
     await this.prisma.whiteboard.delete({ where: { id: boardId } });
+    this.gateway.broadcastBoardDeleted(board.workspace.id, boardId);
     return { id: boardId };
   }
 }
