@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SharedLinkController } from './shared-link.controller';
 import { SharedLinkService } from './shared-link.service';
+import { SharedLinkGateway } from './shared-link.gateway';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
@@ -16,7 +17,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     }),
   ],
   controllers: [SharedLinkController],
-  providers: [SharedLinkService],
+  providers: [SharedLinkService, SharedLinkGateway],
   exports: [SharedLinkService],
 })
 export class SharedLinkModule {}

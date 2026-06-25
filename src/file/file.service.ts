@@ -11,6 +11,7 @@ import { extname } from 'path';
 import { fromBuffer as detectFileType } from 'file-type';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
+import { FileGateway } from './file.gateway';
 import {
   ALLOWED_EXTENSIONS,
   ALLOWED_MIME_TYPES,
@@ -36,6 +37,7 @@ export class FileService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly gateway: FileGateway,
   ) {}
 
   async list(workspaceId: string, userId: string, _userRole: UserRole) {
@@ -149,7 +151,7 @@ export class FileService {
     await this.storage.upload(storageKey, file.buffer, verifiedMimeType);
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         // Per-workspace advisory lock: concurrent uploads to the same
         // workspace serialize here so the quota check sees a consistent
         // total. Different workspaces don't block each other.
@@ -192,6 +194,9 @@ export class FileService {
           },
         });
       });
+
+      this.gateway.emitFileCreated(workspaceId, this.toFileSummary(created));
+      return created;
     } catch (error) {
       await this.storage.delete(storageKey).catch(() => undefined);
       throw error;
@@ -283,7 +288,7 @@ export class FileService {
     });
     const storageLimit = STORAGE_LIMITS[owner.plan];
 
-    return this.prisma.$transaction(async (tx) => {
+    const restored = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${file.workspaceId}))`;
 
       // Count both active and soft-deleted-within-retention bytes — those are
@@ -324,6 +329,12 @@ export class FileService {
         },
       });
     });
+
+    this.gateway.emitFileCreated(
+      file.workspaceId,
+      this.toFileSummary(restored),
+    );
+    return restored;
   }
 
   /**
@@ -387,11 +398,42 @@ export class FileService {
       );
     }
 
-    return this.prisma.file.update({
+    const removed = await this.prisma.file.update({
       where: { id: fileId },
       data: { deletedAt: new Date() },
       select: { id: true, deletedAt: true },
     });
+    this.gateway.emitFileDeleted(file.workspaceId, fileId);
+    return removed;
+  }
+
+  // Trims a file record down to the shape the active-files list consumes, so
+  // broadcasts never leak internal fields (storageKey, etc.). commentCount is
+  // intentionally omitted — the client defaults it to 0 (newly created and
+  // restored files match this contract).
+  private toFileSummary(file: {
+    id: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    createdAt: Date;
+    updatedAt: Date;
+    uploadedBy: {
+      id: string;
+      firstname: string | null;
+      lastname: string | null;
+      email: string;
+    } | null;
+  }) {
+    return {
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
+      createdAt: file.createdAt,
+      updatedAt: file.updatedAt,
+      uploadedBy: file.uploadedBy,
+    };
   }
 
   private async ensureWorkspaceAccess(

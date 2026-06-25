@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { UserPlan, UserRole } from '@prisma/client';
 import { FileService } from './file.service';
+import { FileGateway } from './file.gateway';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from './storage/storage.service';
 import {
@@ -68,6 +69,11 @@ const mockStorageService: jest.Mocked<StorageService> = {
   delete: jest.fn(),
 };
 
+const mockFileGateway = {
+  emitFileCreated: jest.fn(),
+  emitFileDeleted: jest.fn(),
+};
+
 const buildMulterFile = (
   overrides: Partial<Express.Multer.File> = {},
 ): Express.Multer.File =>
@@ -104,6 +110,7 @@ describe('FileService', () => {
         FileService,
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: StorageService, useValue: mockStorageService },
+        { provide: FileGateway, useValue: mockFileGateway },
       ],
     }).compile();
 

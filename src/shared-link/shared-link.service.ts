@@ -5,11 +5,15 @@ import {
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SharedLinkGateway } from './shared-link.gateway';
 import { CreateSharedLinkDto } from './dto/create-shared-link.dto';
 
 @Injectable()
 export class SharedLinkService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gateway: SharedLinkGateway,
+  ) {}
 
   async list(workspaceId: string, userId: string, _userRole: UserRole) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
@@ -37,7 +41,7 @@ export class SharedLinkService {
   ) {
     await this.ensureWorkspaceAccess(workspaceId, userId);
 
-    return this.prisma.sharedLink.create({
+    const link = await this.prisma.sharedLink.create({
       data: {
         workspaceId,
         addedById: userId,
@@ -54,6 +58,9 @@ export class SharedLinkService {
         },
       },
     });
+
+    this.gateway.emitLinkCreated(workspaceId, link);
+    return link;
   }
 
   async remove(linkId: string, userId: string, _userRole: UserRole) {
@@ -61,6 +68,7 @@ export class SharedLinkService {
       where: { id: linkId },
       select: {
         id: true,
+        workspaceId: true,
         addedById: true,
         workspace: { select: { ownerId: true } },
       },
@@ -78,6 +86,7 @@ export class SharedLinkService {
     }
 
     await this.prisma.sharedLink.delete({ where: { id: linkId } });
+    this.gateway.emitLinkDeleted(link.workspaceId, linkId);
     return { id: linkId, deleted: true };
   }
 

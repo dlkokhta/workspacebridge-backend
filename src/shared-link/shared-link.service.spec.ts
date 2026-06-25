@@ -8,6 +8,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { SharedLinkService } from './shared-link.service';
+import { SharedLinkGateway } from './shared-link.gateway';
 import { PrismaService } from '../prisma/prisma.service';
 
 const mockPrismaService = {
@@ -20,6 +21,11 @@ const mockPrismaService = {
     create: jest.fn(),
     delete: jest.fn(),
   },
+};
+
+const mockSharedLinkGateway = {
+  emitLinkCreated: jest.fn(),
+  emitLinkDeleted: jest.fn(),
 };
 
 const workspaceWithMember = (userId: string, ownerId = 'owner-1') => ({
@@ -35,6 +41,7 @@ describe('SharedLinkService', () => {
       providers: [
         SharedLinkService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: SharedLinkGateway, useValue: mockSharedLinkGateway },
       ],
     }).compile();
 
