@@ -3,6 +3,7 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWorkspaceDto } from './dto/create-workspace.dto';
 import { UpdateWorkspaceDto } from './dto/update-workspace.dto';
+import { FILE_SIZE_LIMITS } from '../file/file.constants';
 
 @Injectable()
 export class WorkspaceService {
@@ -43,6 +44,7 @@ export class WorkspaceService {
     const workspace = await this.prisma.workspace.findUnique({
       where: { id },
       include: {
+        owner: { select: { plan: true } },
         members: {
           include: { user: { select: { id: true, firstname: true, lastname: true, email: true, picture: true } } },
         },
@@ -58,7 +60,10 @@ export class WorkspaceService {
       if (!isMember) throw new ForbiddenException('Access denied');
     }
 
-    return workspace;
+    // Surface the per-file upload limit (derived from the owner's plan) so the
+    // client can validate before uploading. The backend remains the real gate.
+    const { owner, ...rest } = workspace;
+    return { ...rest, maxFileSize: FILE_SIZE_LIMITS[owner.plan] };
   }
 
   async update(id: string, userId: string, dto: UpdateWorkspaceDto) {
