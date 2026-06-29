@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
+import { FileGateway } from './file.gateway';
 import { CreateFileCommentDto } from './dto/create-file-comment.dto';
 
 const AUTHOR_SELECT = {
@@ -24,6 +25,7 @@ export class FileCommentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
+    private readonly gateway: FileGateway,
   ) {}
 
   async list(fileId: string, userId: string) {
@@ -37,7 +39,7 @@ export class FileCommentService {
   }
 
   async create(fileId: string, userId: string, dto: CreateFileCommentDto) {
-    await this.ensureFileAccess(fileId, userId);
+    const { workspaceId } = await this.ensureFileAccess(fileId, userId);
 
     const body = dto.body.trim();
     if (!body) {
@@ -63,6 +65,7 @@ export class FileCommentService {
         );
       });
 
+    this.gateway.emitCommentCreated(workspaceId, created);
     return created;
   }
 
@@ -71,8 +74,14 @@ export class FileCommentService {
       where: { id: commentId },
       select: {
         id: true,
+        fileId: true,
         authorId: true,
-        file: { select: { workspace: { select: { ownerId: true } } } },
+        file: {
+          select: {
+            workspaceId: true,
+            workspace: { select: { ownerId: true } },
+          },
+        },
       },
     });
     if (!comment) {
@@ -88,6 +97,11 @@ export class FileCommentService {
     }
 
     await this.prisma.fileComment.delete({ where: { id: commentId } });
+    this.gateway.emitCommentDeleted(
+      comment.file.workspaceId,
+      comment.fileId,
+      commentId,
+    );
     return { id: commentId, deleted: true };
   }
 
@@ -96,11 +110,12 @@ export class FileCommentService {
   private async ensureFileAccess(
     fileId: string,
     userId: string,
-  ): Promise<{ ownerId: string }> {
+  ): Promise<{ ownerId: string; workspaceId: string }> {
     const file = await this.prisma.file.findUnique({
       where: { id: fileId },
       select: {
         deletedAt: true,
+        workspaceId: true,
         workspace: {
           select: {
             ownerId: true,
@@ -118,6 +133,6 @@ export class FileCommentService {
     if (!isOwner && !isMember) {
       throw new ForbiddenException('Not a workspace member');
     }
-    return { ownerId: file.workspace.ownerId };
+    return { ownerId: file.workspace.ownerId, workspaceId: file.workspaceId };
   }
 }

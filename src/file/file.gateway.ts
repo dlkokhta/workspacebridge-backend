@@ -116,6 +116,22 @@ export class FileGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .emit('fileDeleted', { id: fileId });
   }
 
+  // Called by FileCommentService after a comment mutation. Broadcasts to the
+  // workspace room so an open Comments modal on the other side updates without
+  // a refresh. The payload carries fileId so a client can ignore events for
+  // files other than the one it currently has open.
+  emitCommentCreated(workspaceId: string, comment: unknown) {
+    this.server
+      .to(this.roomFor(workspaceId))
+      .emit('fileCommentCreated', comment);
+  }
+
+  emitCommentDeleted(workspaceId: string, fileId: string, commentId: string) {
+    this.server
+      .to(this.roomFor(workspaceId))
+      .emit('fileCommentDeleted', { id: commentId, fileId });
+  }
+
   private roomFor(workspaceId: string): string {
     return `workspace:${workspaceId}`;
   }
