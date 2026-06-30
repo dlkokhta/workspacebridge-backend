@@ -23,6 +23,7 @@ import { SharedTaskModule } from './shared-task/shared-task.module';
 import { PrivateTaskModule } from './private-task/private-task.module';
 import { NotificationModule } from './notification/notification.module';
 import { SearchModule } from './search/search.module';
+import { FeedbackModule } from './feedback/feedback.module';
 import { ThrottlerModule, ThrottlerGuard, ThrottlerException } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
@@ -79,6 +80,7 @@ class CustomThrottlerGuard extends ThrottlerGuard {
     PrivateTaskModule,
     NotificationModule,
     SearchModule,
+    FeedbackModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

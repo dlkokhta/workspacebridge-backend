@@ -52,6 +52,8 @@ model User {
   fileComments         FileComment[]       @relation("FileComments")
   chatReads            ChatRead[]          @relation("UserChatReads")
   fileViews            FileView[]          @relation("UserFileViews")
+  bugReports           BugReport[]         @relation("BugReports")
+  errorLogs            ErrorLog[]          @relation("ErrorLogs")
 
   @@map("users")
 }
@@ -585,6 +587,54 @@ model Notification {
   @@map("notifications")
 }
 
+// Tester-submitted bug reports and auto-captured client-side runtime errors.
+// Both keep the reporter/user relation nullable (onDelete: SetNull) so a
+// deleted account never drops the diagnostic record.
+model BugReport {
+  id          String          @id @default(uuid())
+  description String
+  severity    BugSeverity     @default(MEDIUM)
+  status      BugReportStatus @default(OPEN)
+
+  // Context captured client-side at submit time.
+  url       String?
+  userAgent String? @map("user_agent")
+  // Snapshot of the most recent client error when the report was filed.
+  lastError String? @map("last_error")
+
+  reporterId    String? @map("reporter_id")
+  reporter      User?   @relation("BugReports", fields: [reporterId], references: [id], onDelete: SetNull)
+  // Denormalised so we still know who reported after the account is gone.
+  reporterEmail String? @map("reporter_email")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("bug_reports")
+}
+
+model ErrorLog {
+  id             String  @id @default(uuid())
+  message        String
+  stack          String?
+  // Where it was caught: 'window.onerror' | 'unhandledrejection' | 'react-error-boundary'.
+  source         String
+  url            String?
+  userAgent      String? @map("user_agent")
+  componentStack String? @map("component_stack")
+
+  userId String? @map("user_id")
+  user   User?   @relation("ErrorLogs", fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userId])
+  @@map("error_logs")
+}
+
 enum WorkspaceStatus {
   ACTIVE
   COMPLETED
@@ -641,4 +691,17 @@ enum NotificationType {
   FILE_COMMENT
   TASK_ASSIGNED
   WHITEBOARD_COMMENT
+}
+
+enum BugSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum BugReportStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
 }
